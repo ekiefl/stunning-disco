@@ -1,6 +1,5 @@
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
 
 def get_snv_occurence(snv_table,
 					  plot=False):
@@ -39,6 +38,7 @@ def get_snv_occurence(snv_table,
     freq = freq[order]
     
     if plot:
+        import matplotlib.pyplot as plt
         plt.scatter(np.arange(len(freq)),freq)
         plt.show()
         plt.close()
