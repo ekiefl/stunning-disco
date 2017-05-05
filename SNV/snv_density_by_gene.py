@@ -4,6 +4,7 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
 
 def snv_density_by_gene(df,boxplot=True,cohort=False):
     """
@@ -34,7 +35,8 @@ def snv_density_by_gene(df,boxplot=True,cohort=False):
 
     if boxplot:
         if cohort:
-            df.groupby("cohort").boxplot(column='density_per_gene_per_sample',by='corresponding_gene_call')
+            sns.boxplot(data=df,x='corresponding_gene_call',y='density_per_gene_per_sample',hue='cohort')
+            #df.groupby("cohort").boxplot(column='density_per_gene_per_sample',by='corresponding_gene_call')
         else:
             df.boxplot(column='density_per_gene_per_sample',by='corresponding_gene_call')
     return df
