@@ -51,7 +51,7 @@ def splice_sample_id(df,sep=None):
     sep : str 
         a string identifier present in sample_id that separates the
         cohort info from environment info that should be present exactly once in
-        each sample id.
+        each sample id. See above for behaviour if sep = None 
 
     Returns
     -------

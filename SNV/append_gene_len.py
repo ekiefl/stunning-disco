@@ -6,6 +6,8 @@ import SNV as snv
 def append_gene_len(df,gene_table):
     """Appends gene length to SNV table
     
+    DEPRECATED. anvi-gen-variability-profile now generates this column
+    
     Appends gene length to each snv (row) in the SNV table.
     
     Attributes
