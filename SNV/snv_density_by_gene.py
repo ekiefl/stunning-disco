@@ -28,8 +28,17 @@ def snv_density_by_gene(df,boxplot=False,cohort=False):
         raise ValueError("gene_length column does not exist. See SNV.append_gene_len(...)")
     
     df2 = df.groupby(["corresponding_gene_call","sample_id"]).size().reset_index()
+    df3 = df.groupby(["sample_id"]).size().reset_index()
+
+    print(len(df.groupby(["sample_id"]).size()))
+
     df = pd.merge(df,df2)
     df["density_per_gene_per_sample"] = df[0].astype(float)/df["gene_length"]
+    df = df.drop(0, 1)
+    
+    df = pd.merge(df,df3)
+    df["density_per_sample"] = df[0].astype(float)/df["gene_length"]
+    df = df.drop(0, 1)
 
     if boxplot:
         import matplotlib.pyplot as plt
