@@ -3,10 +3,8 @@
 
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
 
-def snv_density_by_gene(df,boxplot=True,cohort=False):
+def snv_density_by_gene(df,boxplot=False,cohort=False):
     """
     Calculates SNV density on a per gene per sample basis
 
@@ -34,6 +32,8 @@ def snv_density_by_gene(df,boxplot=True,cohort=False):
     df["density_per_gene_per_sample"] = df[0].astype(float)/df["gene_length"]
 
     if boxplot:
+        import matplotlib.pyplot as plt
+        import seaborn as sns
         if cohort:
             sns.boxplot(data=df,x='corresponding_gene_call',y='density_per_gene_per_sample',hue='cohort')
             #df.groupby("cohort").boxplot(column='density_per_gene_per_sample',by='corresponding_gene_call')
