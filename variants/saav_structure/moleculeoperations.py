@@ -5,7 +5,6 @@ import os
 import variants.snv as snv
 import glob
 import random
-import utils as ut
 
 #import pymol
 #from pymol import cmd
@@ -32,26 +31,28 @@ class AddRaptorXProperty():
     should add it here and it should start with "append_"
     """
 
-    def __init__(self, table, input_dir, method_list=None, ss3_confidence=0.66, 
-                 ss8_confidence=0.50, solvent_acc_confidence=0.66):
+    def __init__(self, table, args):
+
+        self.args = args
+        A = lambda x: args[x] if x in args else None
 
     #   making input variables attributes
-        self.table = table
-        self.input_dir = input_dir
-        self.ss3_confidence = ss3_confidence
-        self.ss8_confidence = ss8_confidence
-        self.solvent_acc_confidence = solvent_acc_confidence
+        self.input_dir = A("input-dir")
+        self.method_list = A("method-list")
+        self.ss3_confidence = A("ss3-confidence")
+        self.ss8_confidence = A("ss8-confidence")
+        self.solvent_acc_confidence = A("solvent-acc-confidence")
 
     #   make sure table is VariantsTable object
-        self.validate_table()
+        self.table = table
+        MoleculeOperations.validate_table(self.table)
     #   make sure the input_dir is in good shape
-        self.validate_input_dir()
+        MoleculeOperations.validate_input_dir(self.input_dir, self.table)
     #   define a list of all append methods in this class
         self.all_append_methods = self.get_append_methods()
 
-    #   validate append_methods if methods_list provided
-        if method_list:
-            self.methods_list = methods_list
+    #   validate append methods if methods_list provided
+        if self.method_list:
             self.validate_method_list()
     #   otherwise run all append methods
         else:
@@ -59,7 +60,7 @@ class AddRaptorXProperty():
 
     #   add all the columns associated with the append methods in method_list
         self.add_columns()
-    
+
 
     def add_columns(self):
         """
@@ -80,20 +81,11 @@ class AddRaptorXProperty():
         return self.table.saav_table
 
 
-    def validate_table(self):
-        class_name = self.table.__class__.__name__
-        if not class_name == "VariantsTable":
-            raise ValueError("You have passed an object of class '{}' to the variable \
-                              table. It must be an object of class VariantsTable".\
-                              format(class_name))
-
-
-
 
     def get_append_methods(self):
         """
         This function defines a list of all the append methods. It searches for all the methods
-        in the embedded Append class.
+        in this class that start with "append_"
         """
         append_methods = [func for func in dir(self) \
                           if callable(getattr(self, func)) and func[:7] == "append_"] 
@@ -102,18 +94,19 @@ class AddRaptorXProperty():
 
     def append_8_class_structure(self):
         """
-        RaptorX outputs a {}.all_in_one folder for each sequence it predicts structure for. All
-        of these need to be placed into a folder self.input_dir. The secondary structure predictions
-        for RaptorX are found in self.input_dir/{}.all_in_one/labeling/{}.ss8. This function uses
-        this information from every gene in self.table.saav_table to construct 9 new columns:
+        The 8-class secondary structure predictions for RaptorX are found in
+        self.input_dir/{}.all_in_one/labeling/{}.ss8. This function uses this
+        information from every gene in self.table.saav_table to construct 9 new
+        columns:
 
         ss8 : ["H", "G", "I", "E", "B", "T", "S", "L", "U"]
-            The most likely secondary structure. "H" = alpha helix, "E" = beta sheet, "C" = loop, ..., 
-            and "U" = unknown. We classify the SAAV as "U" whenever the highest confidence score 
-            attributed to the 3 structures is less than self.ss8_confidence.
+            The most likely secondary structure. "H" = alpha helix, "E" = beta
+            sheet, "C" = loop, ..., and "U" = unknown. We classify the SAAV as
+            "U" whenever the highest confidence score attributed to the 3
+            structures is less than self.ss8_confidence.
         ss8_genewide_X : integer
-            The number of amino acids (not SAAVs--you can count this yourself using the table) in the
-            protein that are classified as X
+            The number of amino acids (not SAAVs--you can count this yourself
+            using the table) in the protein that are classified as X
         """
         
         columns = ("codon_order_in_gene","AA","ss8","prob_H","prob_G","prob_I","prob_E","prob_B","prob_T","prob_S","prob_L")
@@ -153,10 +146,10 @@ class AddRaptorXProperty():
 
     def append_3_class_structure(self):
         """ 
-        The 3-class secondary structure predictions for
-        RaptorX are found in self.input_dir/{}.all_in_one/labeling/{}.ss3.
-        This function uses this information from every gene in self.table.saav_table.genes
-        to construct 4 new columns:
+        The 3-class secondary structure predictions for RaptorX are found in
+        self.input_dir/{}.all_in_one/labeling/{}.ss3.  This function uses this
+        information from every gene in self.table.saav_table.genes to construct
+        4 new columns:
 
         ss3 : ["H", "E", "C", "U"] The most likely secondary structure. "H" =
         alpha helix, "E" = beta sheet, "C" = loop, and "U" = unknown. We
@@ -200,15 +193,15 @@ class AddRaptorXProperty():
 
     def append_solvent_accessibility(self):
         """
-        RaptorX outputs a {}.all_in_one folder for each sequence it predicts structure for. All
-        of these need to be placed into a folder self.input_dir. This function incorporates the
-        solvent accesibility predictions found in self.input_dir/{}.all_in_one/labeling/{}.acc
-        by adding one column, "solvent_acc".
+        This function incorporates the solvent accesibility predictions found
+        in self.input_dir/{}.all_in_one/labeling/{}.acc by adding one column,
+        "solvent_acc".
 
-        solvent_acc : ["B"=Buried(pACC=1-10), "M"=Medium(pACC=11-40), "E"=Exposed(pACC=41-100), "U"=Unknown]
-            pACC is equal to the relative solvent accessibility calculated by DSSP. If the highest confidence
-            for the classifications B, M, and E is less than self.solvent_acc_confidence,
-            the SAAV is considered U.
+        solvent_acc : ["B"=Buried(pACC=1-10), "M"=Medium(pACC=11-40),
+        "E"=Exposed(pACC=41-100), "U"=Unknown] pACC is equal to the relative
+        solvent accessibility calculated by DSSP. If the highest confidence for
+        the classifications B, M, and E is less than
+        self.solvent_acc_confidence, the SAAV is considered U.
         """
 
         columns = ("codon_order_in_gene","AA","solvent_acc","prob_B","prob_M","prob_E")
@@ -354,62 +347,23 @@ class VariantsTable():
 
 class MoleculeOperations():
     
-    def __init__(self, args):
+    def __init__(self, table, args):
 
     #   define inputs as attributes
         self.args = args
         A = lambda x: args[x] if x in args else None
-        self.saav_table_fname = A("saav-table")
-        self.genes_list_fname = A("gene-list")
-        self.samples_list_fname = A("samples-list")
         self.output_dir = A("output-dir")
-        self.input_dir = A("raptor-repo")
-        self.simplify_sample_id_method = A("simplify-sample-id-method")
+        self.input_dir = A("input-dir")
 
-        self.saav_table = Table(args)
+    #   make sure table is VariantsTable object
+        self.table = table
+        self.validate_table(self.table)
 
-    #   loads and cleans up saav table
-        self.saav_table = snv.load_snv_table(self.saav_table_fname)
-        self.clean_up_saav_table()
-    
+    #   make sure the input_dir is in good shape
+        self.validate_input_dir(self.input_dir, self.table)
+
     #   create the output directory if it doesn't already exist
-        ut.mkdirp(self.output_dir)
-
-    #   get sample names that have saavs in this protein
-        self.samples = list(self.saav_table["sample_id"].unique())
-
-        # load gene list (list for which raptorx solved structures for)
-        self.genes_of_interest = np.loadtxt(self.genes_list_fname).astype(int)
-
-    def clean_up_saav_table(self):
-        """
-        This function performs any required or desired touch ups on the SAAV table. It is
-        not for adding column names, but could be use for little stuff, like simplifying
-        sample IDs and removing entries with invalid entries.
-        """
-    #   must filter quince mode entries (otherwise practically everywhere is a SAAV)
-        self.saav_table = snv.filter_by_snv(self.saav_table, filt_quince=True, filt_incgene=False)
-    #   entries in the SAAV table are rarely N/A (like BLOSUM scores) and are removed here
-        self.saav_table = self.saav_table.dropna()
-    #   simplifies sample_id according to self.simplify_sample_ids() if simplify-sample-id-methods is provided
-        if self.simplify_sample_id_method:
-            self.simplify_sample_ids()
-
-    def simplify_sample_ids(self):
-        """
-        If ad hoc sample_id modifications need to be made for whatever reason, you can define a method
-        here for such a purpose. For an example, see the case when simplify_sample_id_method == "SAR11",
-        for which this method was first defined.
-        """
-        if self.simplify_sample_id_method == "SAR11":
-            self.saav_table["sample_id"] = self.saav_table["sample_id"].str.replace("SAR11_","")
-            self.saav_table["sample_id"] = self.saav_table["sample_id"].str.replace("_BOWTIE2","")
-            self.saav_table["cohort"] = self.saav_table["sample_id"].str.split("_",expand=True)[0]
-        elif self.simplify_sample_id_method == "placeholder":
-            pass
-        else:
-            raise ValueError("simplify_sample_ids subroutine for simplify_sample_id_method = {} not defined".\
-                              format(self.simplify_sample_id_method))
+        self.mkdirp()
 
     def main(self):
     
@@ -419,7 +373,7 @@ class MoleculeOperations():
     
     #       create subfolder for the gene if it doesn't exist
             gene_dir = os.path.join(self.output_dir, str(gene))
-            ut.mkdirp(gene_dir)
+            self.mkdirp()
     
             pdb_files = glob.glob(os.path.join(self.input_dir, "{}.all_in_one".format(gene), "*.pdb"))
 
@@ -435,6 +389,22 @@ class MoleculeOperations():
     #       invoke the visualization routine, which makes a pse file for each sample
             self.visualize_routine(gene, pdb_file, colormap)
 
+    
+    def mkdirp(self):
+        """
+        This function makes a directory if it doesn't exist, otherwise it doesn't do anything.
+        It is a python wrapper for the "mkdir -p" command in bash
+        """
+        if os.path.exists(self.output_dir):
+            print("Output directory {} already exists. The contents will be overwritten in\
+                   as soon as you finish reading this needlessly verbose sentence, unless you\
+                   press CTRL + c.".format(self.output_dir))
+            import time
+            time.sleep(7.5)
+        else:
+            os.mkdir(self.output_dir)
+
+
     def create_protein_pse_file(self, gene, pdb_file):
     
     #   load and create scaffold and surface objects
@@ -448,6 +418,7 @@ class MoleculeOperations():
     
     #   save it in the gene subfolder
         cmd.save(os.path.join(self.output_dir, str(gene), "00_{}.pse".format(gene)))
+
 
     def visualize_routine(self, gene, pdb_file, colormap):
 
@@ -470,8 +441,6 @@ class MoleculeOperations():
             else:
     #           start visualization procedure
                 self.create_saav_pse_file(gene, sample, saav_data, colormap, pdb_file)
-    
-    ###########################################################################
     
     
     def create_saav_pse_file(self, gene, sample_name, saav_data, colormap, pdb_file):
@@ -505,7 +474,6 @@ class MoleculeOperations():
         cmd.save(os.path.join(self.output_dir, str(gene), "{}.pse".format(sample_name)), sample_name)
         cmd.reinitialize()
     
-    ###########################################################################
     
     def set_common_pse_attributes(self, kind=None):
         """
@@ -541,7 +509,6 @@ class MoleculeOperations():
     #       orient to a 'best position', then save position to return to visualize_routine
             cmd.orient()
     
-    ###########################################################################
     
     def generate_colormap(self, gene, pdb_file):
         """
@@ -592,6 +559,39 @@ class MoleculeOperations():
     
         return colormap
 
-class StructureOps():
-    
 
+    """
+    Below are a couple of variable validation methods that I've made static so
+    they can be borrwed by other classes.
+    """
+
+    @staticmethod
+    def validate_table(table):
+        class_name = table.__class__.__name__
+        if not class_name == "VariantsTable":
+            raise ValueError("You have passed an object of class '{}' to the variable\
+                              table. It must be an object of class VariantsTable".\
+                              format(class_name))
+
+    @staticmethod
+    def validate_input_dir(input_dir, table):
+        """
+        checks that the directory exists and that all the gene names match the
+        gene names in the saav table
+        """
+    #   check that folder exists
+        if not os.path.isdir(input_dir):
+            raise ValueError("you're so bad at this.")
+ 
+    #   if there are zero folders matching the gene_id2.all_in_one format, raise hell
+        subdir_list = glob.glob(os.path.join(input_dir, "*.all_in_one"))
+        if len(subdir_list) == 0:
+            raise ValueError("what the fuck man")
+ 
+    #   if genes in the table aren't found in the raptorx folder, no
+        raptor_genes = [int(os.path.splitext(os.path.basename(x))[0]) for x in subdir_list]
+        in_both = [gene for gene in table.genes if gene in raptor_genes]
+        if not table.genes == in_both:
+            missing_in_raptorx = [gene for gene in table.genes if gene not in in_both]
+            raise ValueError("You have genes in your table that are missing in your raptorX \
+            structure repository. Here are some that are missing: {}".format(missing_in_raptorx))
