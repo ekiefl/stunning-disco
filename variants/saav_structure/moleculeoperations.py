@@ -1,3 +1,4 @@
+import configparser
 import numpy as np
 import shutil
 import pandas as pd
@@ -88,7 +89,7 @@ class AddRaptorXProperty():
         in this class that start with "append_"
         """
         append_methods = [func for func in dir(self) \
-                          if callable(getattr(self, func)) and func[:7] == "append_"] 
+                          if callable(getattr(self, func)) and func.startswith("append")] 
         return append_methods
 
 
@@ -347,77 +348,162 @@ class VariantsTable():
 
 class MoleculeOperations():
     
-    def __init__(self, table, args):
-
+    def __init__(self,  args):
+        
     #   define inputs as attributes
         self.args = args
         A = lambda x: args[x] if x in args else None
         self.output_dir = A("output-dir")
         self.input_dir = A("input-dir")
+        self.color_vars = A("color-vars")
+        self.pymol_config_fname = A("pymol-config")
+        self.saav_table_fname = A("saav-table")
 
-    #   make sure table is VariantsTable object
-        self.table = table
-        self.validate_table(self.table)
+    #   initialize a VariantsTable object
+        self.table = VariantsTable(args)
 
     #   make sure the input_dir is in good shape
         self.validate_input_dir(self.input_dir, self.table)
 
+    #   load pymol_config file as pandas table and validate its logic
+        """ For now, all I do is load the table. Later I will make sure all of
+        the logic works out. Some things off the top of my head: correct
+        headers, data type in each column (e.g. sidechain is Boolean), radius
+        and transparency should deal with scalar data, if groupby should be
+        qualitative. If pymol_config_fname is None, I should have a default
+        file that's loaded """
+        self.load_and_validate_pymol_config_file()
+        
+    #   create columns if they don't exist in saav-table already
+        """ For now, I will assume any columns mentioned in self.pymol_config
+        already exist in self.table. Later I will have to make a list of
+        columns found in pymol_config, and tag to each a class and
+        corresponding method responsible for appending them to saav_table. Then
+        I will call each of those classes with a method_list parameter, e.g.
+        AddRaptorXProperty(self.table, methods_list, args) """
+
     #   create the output directory if it doesn't already exist
-        self.mkdirp()
+        self.mkdir(self.output_dir)
+        self.mkdir(os.path.join(self.output_dir, self.saav_table_fname))
 
-    def main(self):
-    
-    #   loop through each gene
-        for gene in self.genes_of_interest:
-            print ("##################################### GENE {}".format(gene))
-    
-    #       create subfolder for the gene if it doesn't exist
-            gene_dir = os.path.join(self.output_dir, str(gene))
-            self.mkdirp()
-    
-            pdb_files = glob.glob(os.path.join(self.input_dir, "{}.all_in_one".format(gene), "*.pdb"))
+    #   creates the whole pse folder structure, gene by gene
+        for gene in self.table.genes:
+            gene_saav_table = self.table.saav_table[self.table.saav_table["corresponding_gene_call"]==gene]
+            self.process(gene, gene_saav_table)
 
-            if len(pdb_files) != 1:
-                raise ValueError("Expecting 1 pdb file but found {}".format(len(pdb_files)))
-            pdb_file = pdb_files[0]
 
-            colormap = self.generate_colormap(gene, pdb_file)
-    
-    #       create PSE file for new gene
-            self.create_protein_pse_file(gene, pdb_file)
-    
-    #       invoke the visualization routine, which makes a pse file for each sample
-            self.visualize_routine(gene, pdb_file, colormap)
-
-    
-    def mkdirp(self):
+    def process(self, gene, gene_saav_table):
         """
-        This function makes a directory if it doesn't exist, otherwise it doesn't do anything.
-        It is a python wrapper for the "mkdir -p" command in bash
+        This process takes a gene, and computes .pse files according to the
+        logic defined in self.pymol_config
         """
-        if os.path.exists(self.output_dir):
-            print("Output directory {} already exists. The contents will be overwritten in\
-                   as soon as you finish reading this needlessly verbose sentence, unless you\
-                   press CTRL + c.".format(self.output_dir))
-            import time
-            time.sleep(7.5)
+
+        self.do_all_protein_pse_things(gene)
+
+    #   create pse files for all settings defined in pymol_config
+        for setting_id in self.pymol_config.index:
+            pass
+        #   the 
+            
+
+#    def main(self):
+#    
+#
+#            colormap = self.generate_colormap(gene, pdb_file)
+#    
+#        #   create PSE file for new gene
+#            self.create_protein_pse_file(gene, pdb_file)
+#    
+#        #   invoke the visualization routine, which makes a pse file for each sample
+#            self.visualize_routine(gene, pdb_file, colormap)
+
+
+
+    def do_all_protein_pse_things(self, gene):
+        """
+        This function creates a directory for the gene if it doesn't exist, locates
+        the .pdb file, loads in in a pymol session, applies all programmed settings,
+        and saves the file.
+        """
+    #   create subfolder for the gene if it doesn't exist
+        self.gene_dir = os.path.join(self.output_dir, self.saav_table_fname, str(gene))
+        self.mkdirp(self.gene_dir)
+
+    #   get pdb_file
+        pdb_file = self.get_pdb_file(gene)
+
+    #   loads pdb file into pymol, applies default settings, and saves
+        self.create_protein_pse_file(self, gene, pdb_file)
+
+
+    def load_and_validate_pymol_config_file(self):
+        """
+        The format of this file should be standard INI format. an example would be
+
+            [<unique_name_1>]
+            # a descriptive name for <unique_name_1> should be chosen, but could be simple, like "1"
+            color                    = <a column name from SAAV table, default = red>
+            radius                   = <a column name from SAAV table, default = 2>
+            transparency             = <a column name from SAAV table, default = 1>
+            sidechain                = <True, default = False>
+            group_by                 = <a column name from SAAV table>
+            one_color_map_per_sample = <True, default = False>
+
+            [unique_name_2]
+            #group_by is the only required argument
+            group_by = <only requirement
+        """
+
+        if not os.path.isfile(self.pymol_config_fname):
+            raise("{} isn't even a file".format(self.pymol_config_name))
+
+    #   this is a list of all possible attributes
+        attributes_list = ["color","radius","transparency","sidechain","group_by","one_color_map_per_sample"]
+
+    #   load file
+        self.pymol_config = configparser.ConfigParser()
+        self.pymol_config.read(self.pymol_config_fname)
+        
+        for section in self.pymol_config.sections():
+
+        #   don't allow whitespace in section names
+            if " " in section:
+                raise ValueError("Please no whitespace in section names.")
+
+        #   ensure all user attributes in attributes_list
+            for key in self.pymol_config[section]:
+                print(key)
+                if key not in attributes_list:
+                    raise ValueError("{} in {} is not a valid attribute.".format(key, section))
+
+
+        print(self.pymol_config.sections())
+
+
+
+
+    def get_pdb_file(self, gene):
+        """
+        Returns the pdb file for a given gene.
+        """ 
+        pdb_files = glob.glob(os.path.join(self.input_dir, "{}.all_in_one".format(gene), "*.pdb"))
+        if len(pdb_files) != 1:
+            raise ValueError("Expecting 1 pdb file but found {}".format(len(pdb_files)))
+        pdb_file = pdb_files[0]
+        return pdb_file
+
+
+    def mkdirp(self, path):
+        """
+        This function makes a directory if it doesn't exist, otherwise it
+        doesn't do anything.  It is a python wrapper for the "mkdir -p" command
+        in bash
+        """
+        if os.path.exists(path):
+            pass
         else:
-            os.mkdir(self.output_dir)
+            os.mkdir(path)
 
-
-    def create_protein_pse_file(self, gene, pdb_file):
-    
-    #   load and create scaffold and surface objects
-        cmd.reinitialize()
-        cmd.load(pdb_file,"scaffold")
-        cmd.hide() # hides default sticks
-        cmd.copy("surface","scaffold")
-    
-    #   specify common features between genes and saavs
-        self.set_common_pse_attributes(kind="protein")
-    
-    #   save it in the gene subfolder
-        cmd.save(os.path.join(self.output_dir, str(gene), "00_{}.pse".format(gene)))
 
 
     def visualize_routine(self, gene, pdb_file, colormap):
@@ -595,3 +681,6 @@ class MoleculeOperations():
             missing_in_raptorx = [gene for gene in table.genes if gene not in in_both]
             raise ValueError("You have genes in your table that are missing in your raptorX \
             structure repository. Here are some that are missing: {}".format(missing_in_raptorx))
+
+
+
