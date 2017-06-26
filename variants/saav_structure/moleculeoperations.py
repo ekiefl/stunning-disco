@@ -1,4 +1,4 @@
-import configparser
+import ConfigParser
 import numpy as np
 import shutil
 import pandas as pd
@@ -7,8 +7,8 @@ import variants.snv as snv
 import glob
 import random
 
-#import pymol
-#from pymol import cmd
+import pymol
+from pymol import cmd
 
 class AddRaptorXProperty():
     """
@@ -365,13 +365,11 @@ class MoleculeOperations():
     #   make sure the input_dir is in good shape
         self.validate_input_dir(self.input_dir, self.table)
 
-    #   load pymol_config file as pandas table and validate its logic
-        """ For now, all I do is load the table. Later I will make sure all of
-        the logic works out. Some things off the top of my head: correct
-        headers, data type in each column (e.g. sidechain is Boolean), radius
-        and transparency should deal with scalar data, if groupby should be
-        qualitative. If pymol_config_fname is None, I should have a default
-        file that's loaded """
+    #   load pymol_config file as ConfigParse object and validate its logic
+        """ For now, all I do is load the settings. Later I will make sure all
+        of the logic works out. data type in each column (e.g. sidechain is
+        Boolean), radius and transparency should deal with scalar data, if
+        group_by should be qualitative. """
         self.load_and_validate_pymol_config_file()
         
     #   create columns if they don't exist in saav-table already
@@ -380,43 +378,83 @@ class MoleculeOperations():
         columns found in pymol_config, and tag to each a class and
         corresponding method responsible for appending them to saav_table. Then
         I will call each of those classes with a method_list parameter, e.g.
-        AddRaptorXProperty(self.table, methods_list, args) """
+        AddRaptorXProperty(self.table, methods_list, args). Each Add class should
+        have an attribute called "columns_i_add" """
 
     #   create the output directory if it doesn't already exist
-        self.mkdir(self.output_dir)
-        self.mkdir(os.path.join(self.output_dir, self.saav_table_fname))
+        self.mkdirp(self.output_dir)
+        self.mkdirp(os.path.join(self.output_dir, os.path.splitext(self.saav_table_fname)[0]))
 
-    #   creates the whole pse folder structure, gene by gene
+    #   loop_through_sections calls loop_through_genes which calls loop_through_groups
+        self.loop_through_sections()
+
+
+    def loop_through_sections(self):
+        """
+        """
+    #   create pse files for all sections in pymol_config
+        for section in self.pymol_config.sections():
+
+        #   create folder for section if doesn't exist
+            self.section_dir = os.path.join(self.output_dir, os.path.splitext(self.saav_table_fname)[0], section)
+            self.mkdirp(self.section_dir)
+
+        #   This is where the "color_hierarchy" attribute comes in. colormap is
+        #   the colormap used to color the groups and it is redefined based on
+        #   the color_hierarchy attribute. If color_hierarchy = global, then
+        #   colormap is defined only once and therefore the colors are
+        #   conserved across genes. If color_hierarchy = gene, then colormap is
+        #   redefined for every gene. If color_hierarchy = group, then colormap
+        #   is redefined for every group. To avoid colormap being redefined
+        #   inappropriately, self.get_colormap is always called conditioned on
+        #   self.colored = False
+            self.color_hierarchy = self.pymol_config.get(section, "color_hierarchy")
+            if self.color_hierarchy == "global":
+                self.colormap = self.get_colormap()
+
+        #   loop through each gene
+            self.loop_through_genes(section)
+
+
+    def loop_through_genes(self, section):
+    
         for gene in self.table.genes:
-            gene_saav_table = self.table.saav_table[self.table.saav_table["corresponding_gene_call"]==gene]
-            self.process(gene, gene_saav_table)
+        
+        #   make directory for the gene
+            self.mkdirp(os.path.join(self.section_dir, gene))
+        #   make the protein .pse 
+            self.do_all_protein_pse_things(gene)
+        #   color/recolor if appropriate
+            if self.color_hierarchy == "gene":
+                self.colormap = self.get_colormap()
+        #   loop through each group
+            self.loop_through_groups(section, gene)
+
+    def loop_through_groups(self, section, gene):
+
+        groups = self.get_group_list(self, section)
+        for group in groups:
+        
+        #   color/recolor if appropriate
+            if self.color_hierarchy == "group":
+                self.colormap = self.get_colormap()
+
+        #   
+        
 
 
-    def process(self, gene, gene_saav_table):
+    def get_group_list(self, gene_saav_table, section):
         """
-        This process takes a gene, and computes .pse files according to the
-        logic defined in self.pymol_config
+        Returns a list of the unique elements in the SAAV table column specified
+        by the "group_by" attribute in self.pymol_config_fname.
         """
+        return list(saav_table[self.pymol_config.get(section, "group_by")].unique())
 
-        self.do_all_protein_pse_things(gene)
 
-    #   create pse files for all settings defined in pymol_config
-        for setting_id in self.pymol_config.index:
-            pass
-        #   the 
-            
-
-#    def main(self):
-#    
-#
-#            colormap = self.generate_colormap(gene, pdb_file)
-#    
-#        #   create PSE file for new gene
-#            self.create_protein_pse_file(gene, pdb_file)
-#    
-#        #   invoke the visualization routine, which makes a pse file for each sample
-#            self.visualize_routine(gene, pdb_file, colormap)
-
+    def get_color_mapping(self, table):
+        
+        table
+        pass
 
 
     def do_all_protein_pse_things(self, gene):
@@ -425,15 +463,33 @@ class MoleculeOperations():
         the .pdb file, loads in in a pymol session, applies all programmed settings,
         and saves the file.
         """
-    #   create subfolder for the gene if it doesn't exist
-        self.gene_dir = os.path.join(self.output_dir, self.saav_table_fname, str(gene))
-        self.mkdirp(self.gene_dir)
-
     #   get pdb_file
         pdb_file = self.get_pdb_file(gene)
 
     #   loads pdb file into pymol, applies default settings, and saves
-        self.create_protein_pse_file(self, gene, pdb_file)
+        self.create_protein_pse_file(gene, pdb_file)
+
+    def create_protein_pse_file(self, gene, pdb_file):
+
+    #   load and create scaffold and surface objects
+        cmd.reinitialize()
+        cmd.load(pdb_file, "scaffold")
+        cmd.copy("surface","scaffold")
+        cmd.hide() # creates blank slate to work with
+
+    #   All settings related to the protein .pse should be set here
+        cmd.bg_color("white")
+        cmd.set("sphere_scale", "2")
+        cmd.set("fog", "off")
+        cmd.color("wheat", "scaffold")
+        cmd.set("ray_trace_mode", "0")
+        cmd.set("ray_opaque_background", "off")
+        cmd.color("gray90", "surface")
+        cmd.orient()
+        cmd.show("cartoon", "scaffold")
+
+    #   save it in the gene subfolder
+        cmd.save(os.path.join(self.section_dir, gene, "00_{}.pse".format(gene)))
 
 
     def load_and_validate_pymol_config_file(self):
@@ -442,44 +498,53 @@ class MoleculeOperations():
 
             [<unique_name_1>]
             # a descriptive name for <unique_name_1> should be chosen, but could be simple, like "1"
-            color                    = <a column name from SAAV table, default = red>
-            radius                   = <a column name from SAAV table, default = 2>
-            transparency             = <a column name from SAAV table, default = 1>
-            sidechain                = <True, default = False>
-            group_by                 = <a column name from SAAV table>
-            one_color_map_per_sample = <True, default = False>
+            color            = <a column name from SAAV table, default = red>
+            radius           = <a column name from SAAV table, default = 2>
+            transparency     = <a column name from SAAV table, default = 1>
+            sidechain        = <True, default = False>
+            group_by         = <a column name from SAAV table>
+            color_hierarchy  = <global, gene, group>
 
             [unique_name_2]
             #group_by is the only required argument
             group_by = <only requirement
+
+            [DEFAULT]
+            # if any settings are missing from the above sections, they are given the
+            # default values defined here
+
         """
 
         if not os.path.isfile(self.pymol_config_fname):
             raise("{} isn't even a file".format(self.pymol_config_name))
 
     #   this is a list of all possible attributes
-        attributes_list = ["color","radius","transparency","sidechain","group_by","one_color_map_per_sample"]
+        attributes_list   = ["color","radius","transparency","sidechain","color_hierarchy","group_by"]
+        required_defaults = ["color","radius","transparency","sidechain","color_hierarchy"]
 
     #   load file
-        self.pymol_config = configparser.ConfigParser()
+        self.pymol_config = ConfigParser.ConfigParser()
         self.pymol_config.read(self.pymol_config_fname)
-        
+
+        """ IMPORTANT: The indexing syntax for configparser is fundamentally
+        different between python2 and python3. Once we start running pymol
+        through python 3, this syntax will have to be imported over. """
+
+    #   make sure all attributes are present in DEFAULT section
+        default_attributes = [x[0] for x in self.pymol_config.items("DEFAULT")]
+        if set(default_attributes) != set(required_defaults):
+            raise ValueError("DEFAULT must have exactly these attributes: {}".format(attributes_list))
+
         for section in self.pymol_config.sections():
 
         #   don't allow whitespace in section names
             if " " in section:
                 raise ValueError("Please no whitespace in section names.")
 
-        #   ensure all user attributes in attributes_list
-            for key in self.pymol_config[section]:
-                print(key)
-                if key not in attributes_list:
-                    raise ValueError("{} in {} is not a valid attribute.".format(key, section))
-
-
-        print(self.pymol_config.sections())
-
-
+            for name, value in self.pymol_config.items(section):
+            #   demand all user attributes are in attributes_list
+                if name not in attributes_list:
+                    raise ValueError("{} in {} is not a valid attribute.".format(name, section))
 
 
     def get_pdb_file(self, gene):
@@ -503,147 +568,6 @@ class MoleculeOperations():
             pass
         else:
             os.mkdir(path)
-
-
-
-    def visualize_routine(self, gene, pdb_file, colormap):
-
-    #   subset the saav table to only include gene 
-        gene_saav_table = self.saav_table[self.saav_table["corresponding_gene_call"]==gene]
-    
-        for sample in self.samples:
-    #       subset to only include on sample from the cohort
-    
-            gene_saav_table_sample = gene_saav_table[gene_saav_table["sample_id"]==sample]
-    
-    #       create saav_data to be passed to visualization subroutine
-            codon = list(gene_saav_table_sample["codon_order_in_gene"].values)
-            codon_score = list(gene_saav_table_sample["competing_aas"].values)
-            saav_data = dict(zip(codon, codon_score))
-    
-            if len(saav_data) == 0:
-                # this creates an empty file if there are no SAAVs
-                cmd.save(os.path.join(self.output_dir, str(gene), "{}.pse".format(sample)))
-            else:
-    #           start visualization procedure
-                self.create_saav_pse_file(gene, sample, saav_data, colormap, pdb_file)
-    
-    
-    def create_saav_pse_file(self, gene, sample_name, saav_data, colormap, pdb_file):
-    
-    #   we have to load the pdb so we know where the amino acids are in space
-        cmd.load(pdb_file)
-        cmd.hide()
-    
-    #   set commonalities between pse files
-        self.set_common_pse_attributes(kind="saav")
-    
-    #   create the colors for each SAAV
-        pymol.saav_colors = {}
-        for saav in saav_data.keys():
-            pymol.saav_colors[str(saav)] = colormap[saav_data[saav]]
-    
-    #   define the selection of the SAAVs
-        sites = "+".join([str(x) for x in list(saav_data.keys())])
-        cmd.select(sample_name+"_sel","resi {} & name ca".format(sites))
-    
-    #   make the SAAV selection its own object
-        cmd.create(sample_name,sample_name+"_sel")
-    
-    #   change the color for each saav according to the saav_colors dict
-        cmd.alter(sample_name,"color = pymol.saav_colors.get(resi, color)")
-        cmd.alter(sample_name+"_sel","color = pymol.saav_colors.get(resi, color)")
-    
-    #   displays the spheres
-        cmd.show("spheres",sample_name)
-    
-        cmd.save(os.path.join(self.output_dir, str(gene), "{}.pse".format(sample_name)), sample_name)
-        cmd.reinitialize()
-    
-    
-    def set_common_pse_attributes(self, kind=None):
-        """
-        This function sets commond parameters I want shared between PSEs
-        
-        INPUT
-        -----
-        kind : str
-            accepted inputs: "saav" or "protein". Some of the settings are specific
-            to whether we are talking about a protein or a collection of saavs and 
-            so the type must be specified.
-        """
-
-        if not kind:
-            raise ValueError("must be kind")
-    
-    #   make it pretty initial settings (can edit later interactively)
-        cmd.bg_color("white")
-        cmd.set("sphere_scale","2")
-        cmd.set("fog","off")
-    
-        if kind == "saav":
-            pass
-        if kind == "protein":
-            cmd.set(name="transparency",
-                    value=0.60)
-            cmd.show('cartoon','scaffold')
-            #cmd.show('surface','surface')
-            cmd.color('wheat','scaffold')
-            cmd.set("ray_trace_mode","0")
-            cmd.set("ray_opaque_background","off")
-            cmd.color("gray90","surface")
-    #       orient to a 'best position', then save position to return to visualize_routine
-            cmd.orient()
-    
-    
-    def generate_colormap(self, gene, pdb_file):
-        """
-        Gets color mapping for codon_score scores of each saav. Since each gene will
-        procur different amino acid substitutions, the color range is defined
-        elative to each gene.
-        
-        INPUT
-        -----
-        pdb_file : str
-            the protein structure file generated by raptorX
-        OUTPUT
-        ------
-        colormap : dict
-            a dictionary with the keys being codon_score values and the values
-            being color indices for pymol
-        """
-
-        gene_saav_table = self.saav_table[self.saav_table["corresponding_gene_call"]==gene]   
-
-        cmd.reinitialize()
-        cmd.load(pdb_file)
-    #   There are 15 possible codon_score values. temp is a 15 atom selection
-    #   which the cmd.spectrum command is applied to in order to get a 
-    #   pretty spectrum of colors for each codon_score value. Actually, since
-    #   it would be very rare to see all 15 mutations, I make the length
-    #   whatever the range of data is. For example, if the minimum and
-    #   maximum BLOSUM scores are -3 and 4, temp is length 7.
-    
-        values = gene_saav_table["competing_aas"].unique()
-
-        minimum = 0
-        maximum = len(values) + 1
-        values = random.sample(values, len(values))
-    
-        color_range = range(minimum, maximum)
-    
-        cmd.select("temp","resi 1-{} & name ca".format(maximum-minimum))
-        cmd.spectrum("count","gcbmry","temp")
-    #   codon_score_colors is a list of color indices for the colors
-        pymol.codon_score_colors = []
-        cmd.iterate("temp","codon_score_colors.append(color)")
-    #   colormap is a dictionary. The words are codon_score values
-    #   and the definitions are color indices
-        colormap = dict(zip(values, pymol.codon_score_colors))
-    
-        cmd.reinitialize()
-    
-        return colormap
 
 
     """
