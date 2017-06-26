@@ -10,6 +10,7 @@ import matplotlib.cm
 
 import pymol
 from pymol import cmd
+import sys; print(sys.version)
 
 class AddRaptorXProperty():
     """
@@ -81,7 +82,6 @@ class AddRaptorXProperty():
         VariantsTable object.
         """
         return self.table.saav_table
-
 
 
     def get_append_methods(self):
@@ -411,9 +411,8 @@ class MoleculeOperations():
         #   color_hierarchy being either global, gene, or group
             self.color_hierarchy = self.pymol_config.get(section, "color_hierarchy")
             if self.color_hierarchy == "global":
-                color_map_data = self.get_relevant_color_map_data(section)
-                self.colormap = self.get_colormap(section, color_map_data)
-            
+                saav_table_subset = self.get_relevant_saav_table(section)
+                self.colorObject = Color(saav_table_subset, self.pymol_config, section)
         #   loop through each gene
             self.loop_through_genes(section)
 
@@ -428,8 +427,8 @@ class MoleculeOperations():
             self.do_all_protein_pse_things(gene)
         #   color/recolor if appropriate
             if self.color_hierarchy == "gene":
-                color_map_data = self.get_relevant_color_map_data(section, gene=gene)
-                self.colormap = self.get_colormap()
+                saav_table_subset = self.get_relevant_saav_table(section, gene=gene)
+                self.colorObject = Color(saav_table_subset, self.pymol_config, section, gene=gene)
         #   loop through each group
             self.loop_through_groups(section, gene)
 
@@ -439,57 +438,28 @@ class MoleculeOperations():
         groups = self.get_group_list(self, section)
         for group in groups:
 
+        #   subset the saav_table to include only group and gene
+            saav_table_subset = self.get_relevant_saav_table(section, gene=gene, group=group)
+
         #   color/recolor if appropriate
             if self.color_hierarchy == "group":
-                color_map_data = self.get_relevant_color_map_data(section, gene=gene, group=group)
-                self.colormap = self.get_colormap(section, color_map_data)
+                self.colorObject = Color(saav_table_subset, self.pymol_config, section, gene=gene, group=group)
 
+        #   make the saav .pse
+            self.do_all_saav_pse_things(gene, group)
 
-    def get_relevant_color_map_data(self, section, gene=None, group=None):
-        
-        color_map_data = self.table.saav_table[self.pymol_config.get(section,"color_column")]
-
-        if gene:
-            color_map_data = color_map_data[self.table.saav_table["corresponding_gene_call"]==gene]
-        if group:
-            color_map_data = color_map_data[self.table.saav_table[self.pymol_config.get(section, "group_by")]]
-
-        return color_map_data
-
-
-    def get_colormap(self, section, color_map_data):
-        
-        color_scheme = self.pymol_config.get(section, "color_scheme")
-
-    #   conditional for if the column is qualitative (not an integer or float)
-        if color_map_data.dtype == object:
-            number_of_distinct_colors = color_map_data.nunique()
-            
-        #   raise warning if number of distinct colors is pretty high
-            if number_of_distinct_colors > 40:
-                print("WARNING: the number of requested distinct colors for {} is\
-                       {} but that's kind of high...".format(section, number_of_distinct_colors))
-
-            number_of_distinct_colors=512
-            colormap = matplotlib.cm.get_cmap(color_scheme, number_of_distinct_colors)
-            for i in range(number_of_distinct_colors):
-                print(colormap(i))
-
-    #   conditional for if the column is scalar
-        else:
-        #   the colormap is scaled to run from the min to the max of color_map_data
-            colorObject = matplotlib.cm.ScalarMappable(norm=[np.min(color_map_data),np.max(color_map_data)], cmap=color_scheme)
-            colormap = colorObject.get_cmap()
-        return colormap
-            
-
-    def get_group_list(self, gene_saav_table, section):
+    def do_all_saav_pse_things(self, gene, group):
         """
-        Returns a list of the unique elements in the SAAV table column specified
-        by the "group_by" attribute in self.pymol_config_fname.
+        This function creates creates a saav .pse file for each group, and then
+        saves the file.
         """
-        return list(self.table.saav_table[self.pymol_config.get(section, "group_by")].unique())
-
+    #   the pdb_file is required to know what structure to map the SAAVs onto 
+        pdb_file = self.get_pdb_file(gene)
+    #   create the file
+        self.create_saav_pse_file(pdb_file, gene, group)
+    #   save the file
+        cmd.save(os.path.join(self.section_dir, str(gene), group, "{}_{}.pse".format(str(gene),group)))
+        cmd.reinitialize()
 
     def do_all_protein_pse_things(self, gene):
         """
@@ -499,9 +469,12 @@ class MoleculeOperations():
         """
     #   get pdb_file
         pdb_file = self.get_pdb_file(gene)
-
     #   loads pdb file into pymol, applies default settings, and saves
         self.create_protein_pse_file(gene, pdb_file)
+    #   save it in the gene subfolder and then reinitialize
+        cmd.save(os.path.join(self.section_dir, str(gene), "00_{}.pse".format(gene)))
+        cmd.reinitialize()
+
 
     def create_protein_pse_file(self, gene, pdb_file):
 
@@ -522,8 +495,22 @@ class MoleculeOperations():
         cmd.orient()
         cmd.show("cartoon", "scaffold")
 
-    #   save it in the gene subfolder
-        cmd.save(os.path.join(self.section_dir, str(gene), "00_{}.pse".format(gene)))
+    def get_relevant_saav_table(self, section, gene=None, group=None):
+        
+        saav_table_subset = self.table.saav_table
+        if gene:
+            saav_table_subset = saav_table_subset[saav_table_subset["corresponding_gene_call"]==gene]
+        if group:
+            saav_table_subset = saav_table_subset[self.table.saav_table[self.pymol_config.get(section, "group_by")]==group]
+        return saav_table_subset
+
+
+    def get_group_list(self, gene_saav_table, section):
+        """
+        Returns a list of the unique elements in the SAAV table column specified
+        by the "group_by" attribute in self.pymol_config_fname.
+        """
+        return list(self.table.saav_table[self.pymol_config.get(section, "group_by")].unique())
 
 
     def load_and_validate_pymol_config_file(self):
@@ -567,6 +554,10 @@ class MoleculeOperations():
 
         """ IMPORTANT: make the following code: If color_column = False, ensure
         that color_scheme is a pymol_color."""
+
+        """ IMPORTANT: color_column either takes a string OR the boolean "False". Currently I just
+        test whether the string = "False". Ideally I will convert to a boolean if the user input
+        is the string "False" """
 
     #   make sure all attributes are present in DEFAULT section
         default_attributes = [x[0] for x in self.pymol_config.items("DEFAULT")]
@@ -644,43 +635,100 @@ class MoleculeOperations():
             raise ValueError("You have genes in your table that are missing in your raptorX \
             structure repository. Here are some that are missing: {}".format(missing_in_raptorx))
 
+
+
+
 class Color():
     
-    def __init__(self, saav_table, color_scheme, section, gene, group):
+    def __init__(self, saav_table, pymol_config, section, gene=None, group=None):
 
     #   make input parameters class attributes
         self.saav_table = saav_table
-        self.color_scheme = color_scheme
-        self.color_column = color_column
+        self.pymol_config = pymol_config
         self.section = section
         self.gene = gene
         self.group = group
 
-    #   if color_column = False, shit just got easy. Code this later
-        """Code goes here for is color_column = False"""
+    #   get color_scheme from pymol_config
+        self.color_scheme = pymol_config.get(section,"color_scheme")
+    #   get color_column from pymol_config
+        self.color_column = pymol_config.get(section,"color_column")
 
-    #   otherwise, there is more work to do
-        self.template_data_for_colormap = self.extract_unique_color_values()
-
-    #   determine datatype of template_data_for_colormap (is it a string or a number?)
-        self.dtype = self.find_datatype()
+    #   condition for when a color column is provied.
+        if self.color_column != "False":
+        #   create template data: an array of the unique entries
+            self.template_data_for_colormap = self.extract_unique_color_values()
+        #   determine datatype of template_data_for_colormap (is it a string or a number?)
+            self.columntype = self.find_columntype()
 
     #   create colormap
         self.colormap = self.create_colormap()
 
-    #   create a legend (a dictionary mapping value to RGB)
-        self.legend = create_legend()
-        
+        if self.color_column != "False":
+        #   create a legend (a dictionary mapping value to RGB)
+            self.legend = self.create_legend()
+
+
+    def create_colormap(self):
+        """
+        returns a colormap regardless of whether we are coloring according to a constant
+        pymol-defined color, or whether we provide a column--either with self.columntype == "strings"
+        or "numbers"
+        """
+    #   if this conditional is entered, self.color_scheme is guaranteed to be a valid pymol scheme
+        if self.color_column == "False":
+            rgb = cmd.get_color_tuple([x[1] for x in cmd.get_color_indices() if x[0]==self.color_scheme][0])
+            def colormap(x):
+                """
+                This colormap always returns the pymol color RGB tuple, regardless
+                of what the input is
+                """
+                return rgb
+
+    #   condition for the case when a column is supplied for column_color
+        else:
+        #   conditional for if the column has string-like data
+            if self.columntype == "strings":
+
+            #   raise warning if number of distinct colors is pretty high
+                if len(self.template_data_for_colormap) > 40:
+                    print("WARNING: the number of requested distinct colors for {} is\
+                           {} but that's kind of high...".format(self.section, len(self.template_data_for_colormap)))
+
+            #   number of distinct colors
+                colormap = matplotlib.cm.get_cmap(self.color_scheme, len(self.template_data_for_colormap))
+
+        #   conditional for if column has number-like data 
+            else:
+            #   the colormap is scaled to run from the min to the max of color_map_data
+                bounds = [np.min(self.template_data_for_colormap), np.max(self.template_data_for_colormap)]
+                colorObject = matplotlib.cm.ScalarMappable(norm=bounds, cmap=self.color_scheme)
+                colormap = colorObject.get_cmap()
+        return colormap
+
+
     def access_colormap(self, value):
         """
         Because either string or number data is accepted for coloring, this
         wrapper function is used to access the RGB values in self.colormap
-        depending on self.dtype
+        depending on self.columntype. Not only this, but sometimes no column
+        is specified, in which case a pymol color is used. This also takes care
+        of this
         """
-        if self.dtype == "strings":
-            return self.colormap(self.legend[value])
-        else:
+    
+    #   pymol coloring
+        if self.color_column == "False":
             return self.colormap(value)
+
+    #   column coloring
+        else:
+        #   string-type data
+            if self.columntype == "strings":
+                return self.colormap(self.legend[value])
+        #   number-type data
+            else:
+                return self.colormap(value)
+
 
     def create_legend(self):
         """
@@ -692,40 +740,42 @@ class Color():
         values that can be accessed by indices or by the value mapped to that
         index. For example, self.colormap(10) returns the 10th RGB value
         whereas self.colormap(10.0) returns the RGB which most closely matches
-        the value 10.0. When self.dtype == "numbers" we access RGB values the
-        second way, but when self.dtype == "strings" we access RGB values the
+        the value 10.0. When self.columntype == "numbers" we access RGB values the
+        second way, but when self.columntype == "strings" we access RGB values the
         first way. And in order to do that, we need to associate each index to
         a unique value in self.template_data_for_colormap. We do that with
         self.legend.  To spell it out fully, suppose
         self.template_data_for_colormap == [ Ile, Val, Glu ].  Then self.legend
         = {"Ile":0, "Val":1, "Glu":2} and to access the color associated with
-        Ile, we call self.colormap(self.legend["Ile"])
+        Ile, we call self.colormap(self.legend["Ile"]). The legend only exists
+        for when column_name is provided.
         """
+
         legend = {}
 
-    #   if dtype = strings, a value must be defined for each color
-        if self.dtype == "strings":
-            for ind, value in enumerate(self.template_data_for_colormap.values):
+    #   if columntype = strings, a value must be defined for each color
+        if self.columntype == "strings":
+            for ind, value in enumerate(self.template_data_for_colormap):
             #   index only first 3 since 4th is alpha
                 legend[value] = self.colormap(ind)[:3]
 
-    #   if dtype = numbers, only the min and max need to be defined 
+    #   if columntype = numbers, only the min and max need to be defined 
         else:
             legend[self.template_data_for_colormap.min()] = self.colormap(self.template_data_for_colormap.min())
             legend[self.template_data_for_colormap.max()] = self.colormap(self.template_data_for_colormap.max())
-
         return legend
+
 
     def extract_unique_color_values(self): 
         """
         Takes SAAV table (already assumed to be subsetted according to
         gene and group) and returns the unique values
         """
-        template_data_for_colormap = self.saav_table[color_scheme].unique()
+        template_data_for_colormap = self.saav_table[self.color_column].unique()
         return template_data_for_colormap
         
 
-    def find_datatype(self):
+    def find_columntype(self):
         """
         Determines the data type of the column (either string or number)
         """
@@ -733,28 +783,6 @@ class Color():
         return "strings" if self.template_data_for_colormap.dtype==object else "numbers"
 
 
-    def create_colormap(self):
-        
-    #   conditional for if the column has string-like data
-        if self.dtype == "strings":
-
-        #   raise warning if number of distinct colors is pretty high
-            if len(self.template_data_for_colormap) > 40:
-                print("WARNING: the number of requested distinct colors for {} is\
-                       {} but that's kind of high...".format(section, number_of_distinct_colors))
-
-        #   number of distinct colors
-            colormap = matplotlib.cm.get_cmap(self.color_scheme, len(self.template_data_for_colormap))
-
-    #   conditional for if column has number-like data 
-        else:
-        #   the colormap is scaled to run from the min to the max of color_map_data
-            bounds = [np.min(self.template_data_for_colormap), np.max(self.template_data_for_colormap)]
-            colorObject = matplotlib.cm.ScalarMappable(norm=bounds, cmap=self.color_scheme)
-            colormap = colorObject.get_cmap()
-        return colormap
-
-        
     @staticmethod
     def is_it_a_pymol_color(color_scheme):
         pymol_colors = cmd.get_color_indices()
