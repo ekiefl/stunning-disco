@@ -370,7 +370,7 @@ class MoleculeOperations():
     #   load pymol_config file as ConfigParse object and validate its logic
         """ For now, all I do is load the settings. Later I will make sure all
         of the logic works out. data type in each column (e.g. sidechain is
-        Boolean), radius and transparency should deal with scalar data, if
+        Boolean), radii and alpha should deal with scalar data, if
         group_by should be qualitative. """
         self.load_and_validate_pymol_config_file()
         
@@ -398,6 +398,7 @@ class MoleculeOperations():
         for section in self.pymol_config.sections():
 
         #   create folder for section if doesn't exist
+            self.section = section
             self.section_dir = os.path.join(self.output_dir, os.path.splitext(self.saav_table_fname)[0], section)
             self.mkdirp(self.section_dir)
 
@@ -414,13 +415,13 @@ class MoleculeOperations():
         #   global, gene, or group
             self.color_hierarchy = self.pymol_config.get(section, "color_hierarchy")
             if self.color_hierarchy == "global":
-                saav_table_subset = self.get_relevant_saav_table(section)
-                self.colorObject = Color(saav_table_subset, self.pymol_config, section)
+                saav_table_subset = self.get_relevant_saav_table()
+                self.colorObject = Color(saav_table_subset, self.pymol_config, self.section)
         #   loop through each gene
-            self.loop_through_genes(section)
+            self.loop_through_genes()
 
 
-    def loop_through_genes(self, section):
+    def loop_through_genes(self):
     
         for gene in self.table.genes:
         
@@ -430,22 +431,22 @@ class MoleculeOperations():
             self.do_all_protein_pse_things(gene)
         #   color/recolor if appropriate
             if self.color_hierarchy == "gene":
-                saav_table_subset = self.get_relevant_saav_table(section, gene=gene)
-                self.colorObject = Color(saav_table_subset, self.pymol_config, section, gene=gene)
+                saav_table_subset = self.get_relevant_saav_table(gene=gene)
+                self.colorObject = Color(saav_table_subset, self.pymol_config, self.section, gene=gene)
         #   loop through each group
-            self.loop_through_groups(section, gene)
+            self.loop_through_groups(gene)
 
 
-    def loop_through_groups(self, section, gene):
+    def loop_through_groups(self, gene):
 
-        groups = self.get_group_list(self, section)
+        groups = self.get_group_list(self, self.section)
         for group in groups:
 
         #   subset the saav_table to include only group and gene
-            saav_table_subset = self.get_relevant_saav_table(section, gene=gene, group=group)
+            saav_table_subset = self.get_relevant_saav_table(gene=gene, group=group)
         #   color/recolor if appropriate
             if self.color_hierarchy == "group":
-                self.colorObject = Color(saav_table_subset, self.pymol_config, section, gene=gene, group=group)
+                self.colorObject = Color(saav_table_subset, self.pymol_config, self.section, gene=gene, group=group)
         #   make the saav .pse
             self.do_all_saav_pse_things(saav_table_subset, gene, group)
 
@@ -454,35 +455,18 @@ class MoleculeOperations():
         This function creates creates a saav .pse file for each group, and then
         saves the file.
         """
-    #   holds all the info for each SAAV like color, radius, & transparency
+    #   holds all the info for each SAAV like color, radii, & alpha
         self.saav_properties = self.fill_saav_properties_table(saav_table_subset)
     #   the pdb_file is required to know what structure to map the SAAVs onto 
         pdb_file = self.get_pdb_file(gene)
     #   create the file
         self.create_saav_pse_file(pdb_file, gene, group)
     #   save the file
-        cmd.save(os.path.join(self.section_dir, str(gene), group, "{}_{}.pse".format(str(gene),group)))
+        cmd.save(os.path.join(self.section_dir, str(gene), "{}.pse".format(group)))
         cmd.reinitialize()
 
-    def fill_saav_properties_table(self, saav_table_subset):
-        """
-        """
-    #   I modify the saav_table so that the indices are equal to "codon_order_in_gene" except
-    #   I add +1 to account for the zero-indexing anvio does
 
-        saav_table_subset["resi"] = saav_table_subset["codon_order_in_gene"]+1
-        saav_table_subset.set_index("resi", inplace=True, drop=True)
-        saav_properties = pd.DataFrame({}, index=saav_table_subset.index)
-
-    #   add color_indices column
-        saav_properties["color_indices"] = self.colorObject.create_color_indices_for_group(saav_table_subset)
-        print(saav_properties)
-    #   add transparency column
-        pass
-    #   add radius column
-        pass
-
-    def create_saav_pse(self, pdb_file, gene, group):
+    def create_saav_pse_file(self, pdb_file, gene, group):
     
     #   we have to load the pdb so we know where the amino acids are in space
         cmd.load(pdb_file)
@@ -491,32 +475,107 @@ class MoleculeOperations():
     #   is merged with its corresponding protein .pse, the settings of the
     #   merged .pse inherits the settings defined under create_protein_pse_file
         cmd.bg_color("white")
+        cmd.set("fog","off")
+
+    #   define the selection of the SAAVs and create their object
+        sites = "+".join([str(resi) for resi in self.saav_properties.index])
+        cmd.select(group+"_sel","resi {}".format(sites))
+        cmd.create(group,group+"_sel")
     
-        
-    #   create the colors for each SAAV
-        pymol.saav_colors = {}
-        for saav in sample_data.keys():
-            pymol.saav_colors[str(saav)] = color_mapping[sample_data[saav]]
-    
-    #   define the selection of the SAAVs
-        sites = "+".join([str(x) for x in list(sample_data.keys())])
-        cmd.select(sample_name+"_sel","resi {} & name ca".format(sites))
-    
-    #   make the SAAV selection its own object
-        cmd.create(sample_name,sample_name+"_sel")
-    
+        pymol.saav_properties = self.saav_properties
     #   change the color for each saav according to the saav_colors dict
-        cmd.alter(sample_name,"color = pymol.saav_colors.get(resi, color)")
-        cmd.alter(sample_name+"_sel","color = pymol.saav_colors.get(resi, color)")
+        cmd.alter(group,"color = pymol.saav_properties.loc[int(resi),'color_indices']")
+        cmd.alter(group,"s.sphere_transparency = pymol.saav_properties.loc[int(resi),'alpha']")
+        cmd.alter(group,"s.sphere_scale = pymol.saav_properties.loc[int(resi),'radii']")
+        cmd.rebuild()
+
     
     #   displays the spheres
-        cmd.show("spheres",sample_name)
+        cmd.show("spheres",group)
     
-    #   apply arbitrary view (that's consistent across saav pses in a protein)
-        cmd.set_view(view)
-    
-        cmd.save("{}/03_pymol_BLOSUM/{}/{}.pse".format(wdir,gene,sample_name),sample_name)
-        cmd.reinitialize()
+
+    def fill_saav_properties_table(self, saav_table_subset):
+        """
+        This function produces a table of SAAV properties (size, color, radii,
+        maybe more later) that, as an example, looks like this:
+
+        resi   color_indices   alpha   radii
+        148    5342            0.8            2.0
+        244    2042            0.7            2.0
+        248    4222            0.8            8.0
+        ...    ...             ...            ...
+
+        This is the table fed to PyMOL's cmd.alter function in order to change
+        the appearance of the SAAVs in the SAAV .pse file. Getting this table
+        requires some data massaging. For one, if your group is composed of
+        multiple samples, its possible to have multiple SAAVs at a single codon
+        position, and their columns which specify color_indices, alpha,
+        and/or radii could be non-identical. To reconcile this, I take the
+        following approach: columns that have number data are averaged (for
+        example alpha and radii must be from number data), and for
+        columns that have string data, the most frequent entry is the one
+        chosen (e.g. if competing_aas is your color column and you observe
+        AspGlu AspGlu and IleGlue at resi 148, the color_indices are calculated
+        for AspGlu.
+        """
+
+    #   I add +1 to account for the zero-indexing anvio does
+        saav_table_subset["resi"] = saav_table_subset["codon_order_in_gene"]+1
+
+    #   rebrand the column names for style points
+        color_column = self.colorObject.color_column
+        alpha_column = self.pymol_config.get(self.section,"alpha")
+        radii_column = self.pymol_config.get(self.section,"radii") 
+
+    #   determine/define whether columns are string-type or number-type
+        string_or_number = {color_column : self.colorObject.columntype,
+                            alpha_column : "numbers",
+                            radii_column : "numbers"}
+
+    #   if number-type, take the mean. if string-type, take most frequent string
+        def resolve_ambiguity(dtype):
+            if dtype == "numbers":
+                return np.mean
+            if dtype == "strings":
+                return lambda x: x.value_counts().idxmax()
+
+        methods_dictionary  = {}
+        for column, dtype in string_or_number.items():
+            methods_dictionary[column] = resolve_ambiguity(dtype)
+
+    #   this single line illustrates why pandas is so fucking good
+        saav_data = saav_table_subset.groupby("resi").agg(methods_dictionary)
+
+        """ The first part of this method created an aggregated form of the
+        data for situations in which the same SAAV position was found multiple
+        times within the group. The aggregated data is defined in `saav_data`.
+        But pymol doesn't know what to do with data such as `AspGlu`, so the
+        second part of this method transforms this data into terms that are
+        directly accessible to PyMOL. For example, in place of `AspGlu` would
+        be `1452`, the color index corresponding to `AspGlu`. This new data is
+        the table spelled out in the above docstring and is called
+        `saav_properties`. """
+
+    #   Now I have to translate the data in saav_data to data understood by PyMOL
+        saav_properties = pd.DataFrame({}, index=saav_data.index)
+
+    #   add color_indices column
+        saav_properties["color_indices"] = self.colorObject.create_color_indices_for_group(saav_data)
+        """ IMPORTANT: I will eventually have alpha and radii classes that do a
+        similar task to that done directly above for color. But for now, I just
+        write specific and non-scalable code. In what follows I assume that the
+        columns for radii and alpha are both values that very between 0 and
+        1"""
+        if (saav_data[alpha_column].max() or saav_data[radii_column].max()) > 1:
+            print("alpha: {}".format(saav_data[alpha_column].max()))
+            print("radii: {}".format(saav_data[radii_column].max()))
+            raise ValueError("Expecting columns to be less than 0")
+    #   add alpha column
+        saav_properties["alpha"] = saav_data[alpha_column]
+    #   add radii column
+        min_r = 0.5; max_r = 3.0
+        saav_properties["radii"] = min_r + (max_r-min_r) * saav_data[radii_column]
+        return saav_properties
 
     def do_all_protein_pse_things(self, gene):
         """
@@ -552,13 +611,13 @@ class MoleculeOperations():
         cmd.orient()
         cmd.show("cartoon", "scaffold")
 
-    def get_relevant_saav_table(self, section, gene=None, group=None):
+    def get_relevant_saav_table(self, gene=None, group=None):
         
         saav_table_subset = self.table.saav_table
         if gene:
             saav_table_subset = saav_table_subset[saav_table_subset["corresponding_gene_call"]==gene]
         if group:
-            saav_table_subset = saav_table_subset[self.table.saav_table[self.pymol_config.get(section, "group_by")]==group]
+            saav_table_subset = saav_table_subset[self.table.saav_table[self.pymol_config.get(self.section, "group_by")]==group]
         return saav_table_subset
 
 
@@ -577,8 +636,8 @@ class MoleculeOperations():
             [<unique_name_1>]
             # a descriptive name for <unique_name_1> should be chosen, but could be simple, like "1"
             color_column     = <a column name from SAAV table, default = False>
-            radius           = <a column name from SAAV table, default = 2>
-            transparency     = <a column name from SAAV table, default = 1>
+            radii           = <a column name from SAAV table, default = 2>
+            alpha     = <a column name from SAAV table, default = 1>
             sidechain        = <True, default = False>
             group_by         = <a column name from SAAV table>
             color_hierarchy  = <global, gene, group>
@@ -598,8 +657,8 @@ class MoleculeOperations():
             raise("{} isn't even a file".format(self.pymol_config_name))
 
     #   this is a list of all possible attributes
-        attributes_list   = ["color_column","radius","transparency","sidechain","color_hierarchy","color_scheme","group_by"]
-        required_defaults = ["color_column","radius","transparency","sidechain","color_hierarchy","color_scheme"]
+        attributes_list   = ["color_column","radii","alpha","sidechain","color_hierarchy","color_scheme","group_by"]
+        required_defaults = ["color_column","radii","alpha","sidechain","color_hierarchy","color_scheme"]
 
     #   load file
         self.pymol_config = ConfigParser.ConfigParser()
@@ -827,11 +886,11 @@ class Color():
     #   otherwise, we have some work to do
 
 ############ AVOID DIRECT EYE CONTACT ############
-        """IMPORTANT: Piece of shit PyMOL won't let me define color names that
-        contain any numbers whatsoever so I have to name the color of each SAAV
-        some random and unique alphabetic string. This sucks and I'm pissed.
-        Here's this piece of shit code that generates a set of random unique
-        alphabetic strings. unbelievable."""
+        """IMPORTANT: PyMOL won't let me define color names that contain any
+        numbers whatsoever so I have to name the color of each SAAV some random
+        and unique alphabetic string. This sucks and I'm pissed.  Here's this
+        piece of shit code that generates a set of random unique alphabetic
+        strings. lol."""
         def generate(unique):
             chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
             while True:
@@ -846,13 +905,12 @@ class Color():
 
         color_indices = []
         for resi in saav_data.index:
-            rgb = self.access_colormap(saav_data.loc[resi, self.color_column].value_counts().idxmax())
+            rgb = self.access_colormap(saav_data.loc[resi, self.color_column])
             cmd.set_color(color_names[0], rgb)
             color_index = [x[1] for x in cmd.get_color_indices() if x[0]==color_names[0]][0]
             color_indices.append(color_index)
             color_names.pop(0)
         return color_indices
-
 
     @staticmethod
     def is_it_a_pymol_color(color_scheme):
