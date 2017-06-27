@@ -755,13 +755,12 @@ class Color():
         depending on self.columntype. The tuple is converted into a list
         and only the first three elements are considered (the fourth is alpha)
         """
-            
     #   string-type data
         if self.columntype == "strings":
-            return self.colormap(self.legend[value])
+            return list(self.colormap(self.legend[value]))[:3]
     #   number-type data
         else:
-            return self.colormap(value)
+            return list(self.colormap(value))[:3]
 
 
     def create_legend(self):
@@ -789,12 +788,12 @@ class Color():
         if self.columntype == "strings":
             for ind, value in enumerate(self.template_data_for_colormap):
             #   index only first 3 since 4th is alpha
-                legend[value] = list(self.colormap(ind))[:3]
+                legend[value] = ind
 
     #   if columntype = numbers, only the min and max need to be defined 
         else:
-            legend[self.template_data_for_colormap.min()] = list(self.colormap(self.template_data_for_colormap.min())[:3])
-            legend[self.template_data_for_colormap.max()] = list(self.colormap(self.template_data_for_colormap.max())[:3])
+            legend[self.template_data_for_colormap.min()] = self.template_data_for_colormap.min()
+            legend[self.template_data_for_colormap.max()] = self.template_data_for_colormap.max()
         return legend
 
 
@@ -847,10 +846,11 @@ class Color():
 
         color_indices = []
         for resi in saav_data.index:
-            rgb = self.access_colormap(saav_data.loc[resi, self.color_column])
+            rgb = self.access_colormap(saav_data.loc[resi, self.color_column].value_counts().idxmax())
             cmd.set_color(color_names[0], rgb)
             color_index = [x[1] for x in cmd.get_color_indices() if x[0]==color_names[0]][0]
             color_indices.append(color_index)
+            color_names.pop(0)
         return color_indices
 
 
