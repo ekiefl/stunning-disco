@@ -447,7 +447,7 @@ class MoleculeOperations():
             if self.color_hierarchy == "group":
                 self.colorObject = Color(saav_table_subset, self.pymol_config, section, gene=gene, group=group)
         #   make the saav .pse
-            self.do_all_saav_pse_things(gene, group)
+            self.do_all_saav_pse_things(saav_table_subset, gene, group)
 
     def do_all_saav_pse_things(self, saav_table_subset, gene, group):
         """
@@ -475,7 +475,8 @@ class MoleculeOperations():
         saav_properties = pd.DataFrame({}, index=saav_table_subset.index)
 
     #   add color_indices column
-        saav_properties["color_indices"] = self.colorObject.create_color_indices(saav_table_subset)
+        saav_properties["color_indices"] = self.colorObject.create_color_indices_for_group(saav_table_subset)
+        print(saav_properties)
     #   add transparency column
         pass
     #   add radius column
@@ -712,8 +713,11 @@ class Color():
 
     #   if the color_column is False, the color index for pymol color is stored and we're done
         if self.color_column == "False":
+            self.pymol_colors = True
             self.pymol_color_index = [x[1] for x in cmd.get_color_indices() if x[0]==self.color_scheme][0]
             return
+        else:
+            self.pymol_colors = False
 
     #   create template data: an array of the unique entries
         self.template_data_for_colormap = self.extract_unique_color_values()
@@ -751,12 +755,13 @@ class Color():
         depending on self.columntype. The tuple is converted into a list
         and only the first three elements are considered (the fourth is alpha)
         """
+            
     #   string-type data
         if self.columntype == "strings":
-            return list(self.colormap(self.legend[value])[:3])
+            return self.colormap(self.legend[value])
     #   number-type data
         else:
-            return list(self.colormap(value)[:3])
+            return self.colormap(value)
 
 
     def create_legend(self):
@@ -784,12 +789,12 @@ class Color():
         if self.columntype == "strings":
             for ind, value in enumerate(self.template_data_for_colormap):
             #   index only first 3 since 4th is alpha
-                legend[value] = self.colormap(ind)[:3]
+                legend[value] = list(self.colormap(ind))[:3]
 
     #   if columntype = numbers, only the min and max need to be defined 
         else:
-            legend[self.template_data_for_colormap.min()] = self.colormap(self.template_data_for_colormap.min())
-            legend[self.template_data_for_colormap.max()] = self.colormap(self.template_data_for_colormap.max())
+            legend[self.template_data_for_colormap.min()] = list(self.colormap(self.template_data_for_colormap.min())[:3])
+            legend[self.template_data_for_colormap.max()] = list(self.colormap(self.template_data_for_colormap.max())[:3])
         return legend
 
 
@@ -809,23 +814,25 @@ class Color():
     #   for some reason strings come up as type == object in pandas
         return "strings" if self.template_data_for_colormap.dtype==object else "numbers"
 
+
     def create_color_indices_for_group(self, saav_data):
         """
         """
-        num_saavs = np.shape(saav_data)[0]
+        num_saavs = len(saav_data.index)
 
-    #   if a single pymol color is chosen, this is easy
+    #   if a single pymol color was chosen by the user, we're done
         if self.pymol_colors:
-            return [self.pymol_color_index for _ in range(num_saavs)]
+            color_indices = [self.pymol_color_index for _ in range(num_saavs)]
+            return color_indices
 
     #   otherwise, we have some work to do
 
+############ AVOID DIRECT EYE CONTACT ############
         """IMPORTANT: Piece of shit PyMOL won't let me define color names that
         contain any numbers whatsoever so I have to name the color of each SAAV
         some random and unique alphabetic string. This sucks and I'm pissed.
         Here's this piece of shit code that generates a set of random unique
         alphabetic strings. unbelievable."""
-        ############ AVOID DIRECT EYE CONTACT ############
         def generate(unique):
             chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
             while True:
@@ -836,9 +843,15 @@ class Color():
         color_names = []
         for _ in range(num_saavs):
             generate(color_names)
-        ############ AVOID DIRECT EYE CONTACT ############
+############ AVOID DIRECT EYE CONTACT ############
 
-    #   
+        color_indices = []
+        for resi in saav_data.index:
+            rgb = self.access_colormap(saav_data.loc[resi, self.color_column])
+            cmd.set_color(color_names[0], rgb)
+            color_index = [x[1] for x in cmd.get_color_indices() if x[0]==color_names[0]][0]
+            color_indices.append(color_index)
+        return color_indices
 
 
     @staticmethod
