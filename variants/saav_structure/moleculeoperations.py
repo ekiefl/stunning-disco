@@ -53,6 +53,7 @@ class AddRaptorXProperty():
         MoleculeOperations.validate_table(self.table)
     #   make sure the input_dir is in good shape
         MoleculeOperations.validate_input_dir(self.input_dir, self.table)
+
     #   define a list of all append methods in this class
         self.all_append_methods = self.get_append_methods()
 
@@ -390,7 +391,7 @@ class MoleculeOperations():
 
     #   create the output directory if it doesn't already exist
         self.mkdirp(self.output_dir)
-        self.mkdirp(os.path.join(self.output_dir, os.path.splitext(self.saav_table_fname)[0]))
+        self.mkdirp(os.path.join(self.output_dir, os.path.basename(os.path.splitext(self.saav_table_fname)[0])))
 
     #   loop_through_sections calls loop_through_genes which calls loop_through_groups
         self.loop_through_sections()
@@ -404,7 +405,7 @@ class MoleculeOperations():
 
         #   create folder for section if doesn't exist
             self.section = section
-            self.section_dir = os.path.join(self.output_dir, os.path.splitext(self.saav_table_fname)[0], section)
+            self.section_dir = os.path.join(self.output_dir, os.path.basename(os.path.splitext(self.saav_table_fname)[0]), section)
             self.mkdirp(self.section_dir)
         #   within the section, create two subdirectories: 1 for PyMOL 1 for images
             self.section_dir_pymol = os.path.join(self.section_dir, "PyMOL")
@@ -426,7 +427,6 @@ class MoleculeOperations():
         #   global, gene, or group
             self.color_hierarchy = self.pymol_config.get(section, "color_hierarchy")
             if self.color_hierarchy == "global":
-                print("I JUST ENTERED SECTION COLORING")
                 saav_table_subset = self.get_relevant_saav_table()
                 self.colorObject = Color(saav_table_subset, self.pymol_config, self.section)
                 self.colorObject.export_legend(self.section_dir_pymol, "{}_legend.txt".format(section))
@@ -454,7 +454,6 @@ class MoleculeOperations():
             self.do_all_protein_pse_things(gene)
         #   color/recolor if appropriate
             if self.color_hierarchy == "gene":
-                print("I JUST ENTERED GENE COLORING")
                 saav_table_subset = self.get_relevant_saav_table(gene=gene)
                 self.colorObject = Color(saav_table_subset, self.pymol_config, self.section, gene=gene)
                 self.colorObject.export_legend(self.gene_dir_pymol, "00_{}_legend.txt".format(gene))
@@ -468,13 +467,10 @@ class MoleculeOperations():
         groups = self.get_group_list(self, self.section)
         for group in groups:
 
-            print("GROUP: {}".format(group))
-
         #   subset the saav_table to include only group and gene
             saav_table_subset = self.get_relevant_saav_table(gene=gene, group=group)
         #   color/recolor if appropriate
             if self.color_hierarchy == "group":
-                print("I JUST ENTERED GROUP COLORING")
                 self.colorObject = Color(saav_table_subset, self.pymol_config, self.section, gene=gene, group=group)
                 self.colorObject.export_legend(os.path.join(self.gene_dir_pymol),"{}_legend.txt".format(group))
 
@@ -496,8 +492,8 @@ class MoleculeOperations():
         self.join_pses(pse_list)
     #   I can't believe this, but the alpha is messed up unless I do this
     #   AFTER merging
-        cmd.set("sphere_transparency", 0.0)
-        cmd.set("sphere_transparency", 1.0)
+        #cmd.set("sphere_transparency", 0.0)
+        #cmd.set("sphere_transparency", 1.0)
 
     #   I could have sophisticated routines here for taking multiple images,
     #   collages, any view setting like orientation, etc. this really deserves
@@ -551,7 +547,6 @@ class MoleculeOperations():
 
     def create_saav_pse_file(self, gene, group):
     
-        s = time.time()
     #   set any settings specific to the SAAV .pse files here. Once a SAAV .pse
     #   is merged with its corresponding protein .pse, the settings of the
     #   merged .pse inherits the settings defined under create_protein_pse_file
@@ -575,12 +570,14 @@ class MoleculeOperations():
 
         #   delete the protein
             cmd.delete(os.path.splitext(os.path.basename(self.protein_pdb_path))[0])
-        
+
             pymol.saav_properties = self.saav_properties
+            print(pymol.saav_properties["alpha"])
         #   change the color for each saav according to the saav_colors dict
             cmd.alter(group,"color = pymol.saav_properties.loc[int(resi),'color_indices']")
             cmd.alter(group,"s.sphere_transparency = pymol.saav_properties.loc[int(resi),'alpha']")
-            cmd.alter(group,"s.sphere_scale = pymol.saav_properties.loc[int(resi),'radii']")
+            cmd.set("sphere_scale", 2.0)
+            #cmd.alter(group,"s.sphere_scale = pymol.saav_properties.loc[int(resi),'radii']")
             cmd.rebuild()
 
         #   displays the spheres
@@ -589,9 +586,7 @@ class MoleculeOperations():
 
         #   save the file
             cmd.save(self.saav_pse_path, group)
-            print( time.time() - s)
-            cmd.quit()
-            #cmd.reinitialize()
+            cmd.reinitialize()
 
 
     def fill_saav_properties_table(self, saav_table_subset):
@@ -716,7 +711,7 @@ class MoleculeOperations():
         cmd.set("ray_opaque_background", "off")
         cmd.color("gray90", "surface")
         cmd.set("cartoon_transparency",0.2)
-        cmd.set("sphere_transparency", 1.0)
+        #cmd.set("sphere_transparency", 1.0)
         #cmd.show("surface", "surface")
         #cmd.set("transparency",0.9)
         cmd.show("cartoon", "scaffold")
@@ -1066,9 +1061,3 @@ class Color():
     def is_it_a_column_color(color_scheme):
         return True if color_scheme in self.saav_table.columns.values else False
 
-class Timer():
-
-    def __init__(self):
-        self.start = time.time()
-    def timestamp(self):
-        print("{} seconds".format(time.time()-self.start))
