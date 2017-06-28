@@ -46,7 +46,7 @@ class AddRaptorXProperty():
         self.ss3_confidence = A("ss3-confidence")
         self.ss8_confidence = A("ss8-confidence")
         self.solvent_acc_confidence = A("solvent-acc-confidence")
-
+        self.save_file = A("save-file") 
     #   make sure table is VariantsTable object
         self.table = table
         MoleculeOperations.validate_table(self.table)
@@ -65,7 +65,6 @@ class AddRaptorXProperty():
     #   add all the columns associated with the append methods in method_list
         self.add_columns()
 
-
     def add_columns(self):
         """
         This function calls all the append methods in self.methods_list. If any of the
@@ -74,6 +73,7 @@ class AddRaptorXProperty():
         """
         for method in self.methods_list:
             append_method = getattr(self, method)
+            print("appending method {}".format(method))
             append_method()
 
 
@@ -252,6 +252,7 @@ class VariantsTable():
         self.simplify_sample_id_method = A("simplify-sample-id-method")
         self.output_dir = A("output-dir")
         self.input_dir = A("raptor-repo")
+        self.save_file = A("save-file")
 
     #   load the saav table
         self.load()
@@ -339,12 +340,12 @@ class VariantsTable():
         Saves any operations performed on the table.
         """
     #   sanity checks
-        if not self.table_out_fname:
+        if not self.save_file:
             raise ValueError("fuck you")
-        if os.path.isfile(self.table_out_fname):
+        if os.path.isfile(self.save_file):
             raise ValueError("fuck you")
     #   save the table in same format style as the output of gen-variability-profile
-        self.saav_table.to_csv(self.table_out_fname, sep='\t', index=False)
+        self.saav_table.to_csv(self.save_file, sep='\t', index=False)
 
 #==================================================================================================
 
@@ -397,6 +398,8 @@ class MoleculeOperations():
         """
         for section in self.pymol_config.sections():
 
+            print("SECTION: {}".format(section))
+
         #   create folder for section if doesn't exist
             self.section = section
             self.section_dir = os.path.join(self.output_dir, os.path.splitext(self.saav_table_fname)[0], section)
@@ -415,8 +418,10 @@ class MoleculeOperations():
         #   global, gene, or group
             self.color_hierarchy = self.pymol_config.get(section, "color_hierarchy")
             if self.color_hierarchy == "global":
+                print("I JUST ENTERED SECTION COLORING")
                 saav_table_subset = self.get_relevant_saav_table()
                 self.colorObject = Color(saav_table_subset, self.pymol_config, self.section)
+                self.colorObject.export_legend(self.section_dir, "{}_legend.txt".format(section))
         #   loop through each gene
             self.loop_through_genes()
 
@@ -424,15 +429,20 @@ class MoleculeOperations():
     def loop_through_genes(self):
     
         for gene in self.table.genes:
+
+            print("GENE: {}".format(gene))
         
         #   make directory for the gene
-            self.mkdirp(os.path.join(self.section_dir, str(gene)))
+            self.gene_dir = os.path.join(self.section_dir, str(gene))
+            self.mkdirp(self.gene_dir)
         #   make the protein .pse 
             self.do_all_protein_pse_things(gene)
         #   color/recolor if appropriate
             if self.color_hierarchy == "gene":
+                print("I JUST ENTERED GENE COLORING")
                 saav_table_subset = self.get_relevant_saav_table(gene=gene)
                 self.colorObject = Color(saav_table_subset, self.pymol_config, self.section, gene=gene)
+                self.colorObject.export_legend(self.gene_dir, "00_{}_legend.txt".format(gene))
         #   loop through each group
             self.loop_through_groups(gene)
 
@@ -442,13 +452,18 @@ class MoleculeOperations():
         groups = self.get_group_list(self, self.section)
         for group in groups:
 
+            print("GROUP: {}".format(group))
+
         #   subset the saav_table to include only group and gene
             saav_table_subset = self.get_relevant_saav_table(gene=gene, group=group)
         #   color/recolor if appropriate
             if self.color_hierarchy == "group":
+                print("I JUST ENTERED GROUP COLORING")
                 self.colorObject = Color(saav_table_subset, self.pymol_config, self.section, gene=gene, group=group)
+                self.colorObject.export_legend(os.path.join(self.gene_dir),"{}_legend.txt".format(group))
         #   make the saav .pse
             self.do_all_saav_pse_things(saav_table_subset, gene, group)
+
 
     def do_all_saav_pse_things(self, saav_table_subset, gene, group):
         """
@@ -461,15 +476,9 @@ class MoleculeOperations():
         pdb_file = self.get_pdb_file(gene)
     #   create the file
         self.create_saav_pse_file(pdb_file, gene, group)
-    #   save the file
-        cmd.save(os.path.join(self.section_dir, str(gene), "{}.pse".format(group)))
-        cmd.reinitialize()
 
 
     def create_saav_pse_file(self, pdb_file, gene, group):
-    
-    #   we have to load the pdb so we know where the amino acids are in space
-        cmd.load(pdb_file)
     
     #   set any settings specific to the SAAV .pse files here. Once a SAAV .pse
     #   is merged with its corresponding protein .pse, the settings of the
@@ -477,21 +486,35 @@ class MoleculeOperations():
         cmd.bg_color("white")
         cmd.set("fog","off")
 
-    #   define the selection of the SAAVs and create their object
-        sites = "+".join([str(resi) for resi in self.saav_properties.index])
-        cmd.select(group+"_sel","resi {}".format(sites))
-        cmd.create(group,group+"_sel")
-    
-        pymol.saav_properties = self.saav_properties
-    #   change the color for each saav according to the saav_colors dict
-        cmd.alter(group,"color = pymol.saav_properties.loc[int(resi),'color_indices']")
-        cmd.alter(group,"s.sphere_transparency = pymol.saav_properties.loc[int(resi),'alpha']")
-        cmd.alter(group,"s.sphere_scale = pymol.saav_properties.loc[int(resi),'radii']")
-        cmd.rebuild()
+    #   if there are no SAAVs,just save an empty file
+        if len(self.saav_properties.index) == 0:
+            cmd.save(os.path.join(self.section_dir, str(gene), "{}.pse".format(group)), group)
+            cmd.reinitialize()
 
-    
-    #   displays the spheres
-        cmd.show("spheres",group)
+    #   otherwise do the stuff we were planning to
+        else:
+        #   we have to load the pdb so we know where the amino acids are in space
+            cmd.load(pdb_file)
+
+        #   define the selection of the SAAVs and create their object
+            sites = "+".join([str(resi) for resi in self.saav_properties.index])
+            cmd.select(group+"_sel","resi {}".format(sites))
+            cmd.create(group,group+"_sel")
+        
+            pymol.saav_properties = self.saav_properties
+        #   change the color for each saav according to the saav_colors dict
+            cmd.alter(group,"color = pymol.saav_properties.loc[int(resi),'color_indices']")
+            cmd.alter(group,"s.sphere_transparency = pymol.saav_properties.loc[int(resi),'alpha']")
+            cmd.alter(group,"s.sphere_scale = pymol.saav_properties.loc[int(resi),'radii']")
+            cmd.rebuild()
+
+        #   displays the spheres
+            cmd.hide()
+            cmd.show("spheres","name ca")
+
+        #   save the file
+            cmd.save(os.path.join(self.section_dir, str(gene), "{}.pse".format(group)), group)
+            cmd.reinitialize()
     
 
     def fill_saav_properties_table(self, saav_table_subset):
@@ -499,7 +522,7 @@ class MoleculeOperations():
         This function produces a table of SAAV properties (size, color, radii,
         maybe more later) that, as an example, looks like this:
 
-        resi   color_indices   alpha   radii
+        resi   color_indices   alpha          radii
         148    5342            0.8            2.0
         244    2042            0.7            2.0
         248    4222            0.8            8.0
@@ -518,6 +541,12 @@ class MoleculeOperations():
         AspGlu AspGlu and IleGlue at resi 148, the color_indices are calculated
         for AspGlu.
         """
+
+        """ IMPORTANT: Currently, this only works when a color column is
+        specified. Will need to be refactored to include single pymol colors.
+        One way around it would be appending a new column to the saav_table
+        when column_color is "False" and calling that the new column_color.
+        This would actually work quite well for alpha and radii as well"""
 
     #   I add +1 to account for the zero-indexing anvio does
         saav_table_subset["resi"] = saav_table_subset["codon_order_in_gene"]+1
@@ -570,8 +599,8 @@ class MoleculeOperations():
             print("alpha: {}".format(saav_data[alpha_column].max()))
             print("radii: {}".format(saav_data[radii_column].max()))
             raise ValueError("Expecting columns to be less than 0")
-    #   add alpha column
-        saav_properties["alpha"] = saav_data[alpha_column]
+    #   add alpha column (my def of alpha is: 0 means opaque, 1 means translucent)
+        saav_properties["alpha"] = 1 - saav_data[alpha_column]
     #   add radii column
         min_r = 0.5; max_r = 3.0
         saav_properties["radii"] = min_r + (max_r-min_r) * saav_data[radii_column]
@@ -587,10 +616,6 @@ class MoleculeOperations():
         pdb_file = self.get_pdb_file(gene)
     #   loads pdb file into pymol, applies default settings, and saves
         self.create_protein_pse_file(gene, pdb_file)
-    #   save it in the gene subfolder and then reinitialize
-        cmd.save(os.path.join(self.section_dir, str(gene), "00_{}.pse".format(gene)))
-        cmd.reinitialize()
-
 
     def create_protein_pse_file(self, gene, pdb_file):
 
@@ -608,8 +633,15 @@ class MoleculeOperations():
         cmd.set("ray_trace_mode", "0")
         cmd.set("ray_opaque_background", "off")
         cmd.color("gray90", "surface")
-        cmd.orient()
+        cmd.set("cartoon_transparency",0.2)
         cmd.show("cartoon", "scaffold")
+        cmd.set("transparency",0.9)
+        cmd.show("surface", "surface")
+        cmd.orient()
+
+    #   save it in the gene subfolder and then reinitialize
+        cmd.save(os.path.join(self.section_dir, str(gene), "00_{}.pse".format(gene)))
+        cmd.reinitialize()
 
     def get_relevant_saav_table(self, gene=None, group=None):
         
@@ -851,9 +883,41 @@ class Color():
 
     #   if columntype = numbers, only the min and max need to be defined 
         else:
-            legend[self.template_data_for_colormap.min()] = self.template_data_for_colormap.min()
-            legend[self.template_data_for_colormap.max()] = self.template_data_for_colormap.max()
+            mini = self.template_data_for_colormap.min()
+            maxi = self.template_data_for_colormap.max()
+            midd = (maxi - mini) / 2
+            legend[mini] = 0
+            legend[midd] = 127
+            legend[maxi] = 255
         return legend
+
+
+    def export_legend(self, path, name=None):
+        """
+        Exports a text file called color_legend.txt
+        """
+
+    #   nothing to report
+        if self.pymol_colors:
+            return
+
+        if not name:
+            name = "color_legend.txt"
+
+    #   creates text file
+        text_legend = open(os.path.join(path, name), "w")
+        text_legend.write("value\tR\tG\tB\thex\n")
+        for key, value in self.legend.items():
+
+        #   get the RGBs as list
+            RGB = self.access_colormap(key)
+        #   matplotlib uses RGB values bounded by [0,1]. I convert to [0,255]
+            RGB = [int(255*X) for X in RGB]
+        #   get corresponding hex code
+            hexcode = '#%02x%02x%02x' % (RGB[0], RGB[1], RGB[2])
+        #   write this and then on to the next--on, on to the next one
+            text_legend.write("{}\t{}\t{}\t{}\t{}\n".format(key, RGB[0], RGB[1], RGB[2], hexcode))
+        text_legend.close()
 
 
     def extract_unique_color_values(self): 
