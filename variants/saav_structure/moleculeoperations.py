@@ -1,4 +1,5 @@
 import ConfigParser
+import time
 import random
 import numpy as np
 import shutil
@@ -361,6 +362,9 @@ class MoleculeOperations():
         self.color_vars = A("color-vars")
         self.pymol_config_fname = A("pymol-config")
         self.saav_table_fname = A("saav-table")
+        self.no_images = A("no-images")
+        self.ray = A("ray")
+        self.res = A("res")
 
     #   initialize a VariantsTable object
         self.table = VariantsTable(args)
@@ -398,12 +402,16 @@ class MoleculeOperations():
         """
         for section in self.pymol_config.sections():
 
-            print("SECTION: {}".format(section))
-
         #   create folder for section if doesn't exist
             self.section = section
             self.section_dir = os.path.join(self.output_dir, os.path.splitext(self.saav_table_fname)[0], section)
             self.mkdirp(self.section_dir)
+        #   within the section, create two subdirectories: 1 for PyMOL 1 for images
+            self.section_dir_pymol = os.path.join(self.section_dir, "PyMOL")
+            if not self.no_images:
+                self.section_dir_images = os.path.join(self.section_dir, "Images")
+                self.mkdirp(self.section_dir_images)
+            self.mkdirp(self.section_dir_pymol)
 
         #   This is where the "color_hierarchy" attribute comes in. colormap is
         #   the colormap used to color the groups and it is redefined based on
@@ -421,7 +429,7 @@ class MoleculeOperations():
                 print("I JUST ENTERED SECTION COLORING")
                 saav_table_subset = self.get_relevant_saav_table()
                 self.colorObject = Color(saav_table_subset, self.pymol_config, self.section)
-                self.colorObject.export_legend(self.section_dir, "{}_legend.txt".format(section))
+                self.colorObject.export_legend(self.section_dir_pymol, "{}_legend.txt".format(section))
         #   loop through each gene
             self.loop_through_genes()
 
@@ -430,11 +438,18 @@ class MoleculeOperations():
     
         for gene in self.table.genes:
 
-            print("GENE: {}".format(gene))
+            print("Currently on SECTION: {}, GENE: {}".format(self.section, gene))
         
-        #   make directory for the gene
-            self.gene_dir = os.path.join(self.section_dir, str(gene))
-            self.mkdirp(self.gene_dir)
+        #   get access to protein_pdb
+            self.protein_pdb_path = self.get_protein_pdb(gene)
+        #   make pymol directory for the gene
+            self.gene_dir_pymol = os.path.join(self.section_dir_pymol, str(gene))
+            self.mkdirp(self.gene_dir_pymol)
+        #   make image directory for the gene
+            if not self.no_images:
+                self.gene_dir_images = os.path.join(self.section_dir_images, str(gene))
+                self.mkdirp(self.gene_dir_images)
+
         #   make the protein .pse 
             self.do_all_protein_pse_things(gene)
         #   color/recolor if appropriate
@@ -442,13 +457,14 @@ class MoleculeOperations():
                 print("I JUST ENTERED GENE COLORING")
                 saav_table_subset = self.get_relevant_saav_table(gene=gene)
                 self.colorObject = Color(saav_table_subset, self.pymol_config, self.section, gene=gene)
-                self.colorObject.export_legend(self.gene_dir, "00_{}_legend.txt".format(gene))
+                self.colorObject.export_legend(self.gene_dir_pymol, "00_{}_legend.txt".format(gene))
         #   loop through each group
             self.loop_through_groups(gene)
 
 
     def loop_through_groups(self, gene):
-
+        """
+        """
         groups = self.get_group_list(self, self.section)
         for group in groups:
 
@@ -460,9 +476,63 @@ class MoleculeOperations():
             if self.color_hierarchy == "group":
                 print("I JUST ENTERED GROUP COLORING")
                 self.colorObject = Color(saav_table_subset, self.pymol_config, self.section, gene=gene, group=group)
-                self.colorObject.export_legend(os.path.join(self.gene_dir),"{}_legend.txt".format(group))
+                self.colorObject.export_legend(os.path.join(self.gene_dir_pymol),"{}_legend.txt".format(group))
+
         #   make the saav .pse
             self.do_all_saav_pse_things(saav_table_subset, gene, group)
+        #   make an image for the group
+            self.do_all_image_things(gene, group)
+
+
+    def do_all_image_things(self, gene, group):
+        """
+        """
+    #   make directory for the group 
+        group_dir = os.path.join(self.gene_dir_images, group)
+        self.mkdirp(group_dir)
+
+    #   merge the pses
+        pse_list = [self.protein_pse_path, self.saav_pse_path]
+        self.join_pses(pse_list)
+    #   I can't believe this, but the alpha is messed up unless I do this
+    #   AFTER merging
+        cmd.set("sphere_transparency", 0.0)
+        cmd.set("sphere_transparency", 1.0)
+
+    #   I could have sophisticated routines here for taking multiple images,
+    #   collages, any view setting like orientation, etc. this really deserves
+    #   its own class. Instead I'll just call this 1-liner that saves the image
+        self.create_image_file(gene, group, group_dir) 
+        
+
+    def create_image_file(self, gene, group, group_dir):
+        """
+        saves a single png image
+        """
+        if self.ray:
+        #   very costly!
+            cmd.ray(self.res)
+
+        save_path = os.path.join(group_dir,"{}.png".format(group))
+        cmd.png(save_path)
+        cmd.reinitialize()
+
+
+    def join_pses(self, pse_list):
+        """
+        Merges multiple pse sessions using the settings of the first file.
+    
+        INPUT
+        -----
+        pse_list : list
+            list of paths of the pse's to merge. The first one in the list 
+            is the one the settings are matched to.
+        save : str, default None
+            If provided, the merged pse is saved with the filepath `save`
+        """
+        cmd.load(pse_list[0])
+        for pse in pse_list[1:]:
+            cmd.load(pse,partial=1)
 
 
     def do_all_saav_pse_things(self, saav_table_subset, gene, group):
@@ -472,14 +542,16 @@ class MoleculeOperations():
         """
     #   holds all the info for each SAAV like color, radii, & alpha
         self.saav_properties = self.fill_saav_properties_table(saav_table_subset)
-    #   the pdb_file is required to know what structure to map the SAAVs onto 
-        pdb_file = self.get_pdb_file(gene)
+
+    #   create save directory for the saav pse
+        self.saav_pse_path = os.path.join(self.section_dir_pymol, str(gene), "{}.pse".format(group))
+
     #   create the file
-        self.create_saav_pse_file(pdb_file, gene, group)
+        self.create_saav_pse_file(gene, group)
 
-
-    def create_saav_pse_file(self, pdb_file, gene, group):
+    def create_saav_pse_file(self, gene, group):
     
+        s = time.time()
     #   set any settings specific to the SAAV .pse files here. Once a SAAV .pse
     #   is merged with its corresponding protein .pse, the settings of the
     #   merged .pse inherits the settings defined under create_protein_pse_file
@@ -488,18 +560,21 @@ class MoleculeOperations():
 
     #   if there are no SAAVs,just save an empty file
         if len(self.saav_properties.index) == 0:
-            cmd.save(os.path.join(self.section_dir, str(gene), "{}.pse".format(group)), group)
+            cmd.save(os.path.join(self.section_dir_pymol, str(gene), "{}.pse".format(group)), group)
             cmd.reinitialize()
 
     #   otherwise do the stuff we were planning to
         else:
         #   we have to load the pdb so we know where the amino acids are in space
-            cmd.load(pdb_file)
+            cmd.load(self.protein_pdb_path)
 
         #   define the selection of the SAAVs and create their object
             sites = "+".join([str(resi) for resi in self.saav_properties.index])
             cmd.select(group+"_sel","resi {}".format(sites))
             cmd.create(group,group+"_sel")
+
+        #   delete the protein
+            cmd.delete(os.path.splitext(os.path.basename(self.protein_pdb_path))[0])
         
             pymol.saav_properties = self.saav_properties
         #   change the color for each saav according to the saav_colors dict
@@ -513,9 +588,11 @@ class MoleculeOperations():
             cmd.show("spheres","name ca")
 
         #   save the file
-            cmd.save(os.path.join(self.section_dir, str(gene), "{}.pse".format(group)), group)
-            cmd.reinitialize()
-    
+            cmd.save(self.saav_pse_path, group)
+            print( time.time() - s)
+            cmd.quit()
+            #cmd.reinitialize()
+
 
     def fill_saav_properties_table(self, saav_table_subset):
         """
@@ -604,6 +681,7 @@ class MoleculeOperations():
     #   add radii column
         min_r = 0.5; max_r = 3.0
         saav_properties["radii"] = min_r + (max_r-min_r) * saav_data[radii_column]
+
         return saav_properties
 
     def do_all_protein_pse_things(self, gene):
@@ -612,16 +690,20 @@ class MoleculeOperations():
         the .pdb file, loads in in a pymol session, applies all programmed settings,
         and saves the file.
         """
-    #   get pdb_file
-        pdb_file = self.get_pdb_file(gene)
     #   loads pdb file into pymol, applies default settings, and saves
-        self.create_protein_pse_file(gene, pdb_file)
+        self.create_protein_pse_file()
+    #   the protein is in the PyMOL state. now I save it
+        self.protein_pse_path = os.path.join(self.section_dir_pymol, str(gene), "00_{}.pse".format(gene))
+    #   save it in the gene subfolder and then reinitialize
+        cmd.save(self.protein_pse_path)
+        cmd.reinitialize()
 
-    def create_protein_pse_file(self, gene, pdb_file):
+
+    def create_protein_pse_file(self):
 
     #   load and create scaffold and surface objects
         cmd.reinitialize()
-        cmd.load(pdb_file, "scaffold")
+        cmd.load(self.protein_pdb_path, "scaffold")
         cmd.copy("surface","scaffold")
         cmd.hide() # creates blank slate to work with
 
@@ -634,14 +716,12 @@ class MoleculeOperations():
         cmd.set("ray_opaque_background", "off")
         cmd.color("gray90", "surface")
         cmd.set("cartoon_transparency",0.2)
+        cmd.set("sphere_transparency", 1.0)
+        #cmd.show("surface", "surface")
+        #cmd.set("transparency",0.9)
         cmd.show("cartoon", "scaffold")
-        cmd.set("transparency",0.9)
-        cmd.show("surface", "surface")
         cmd.orient()
 
-    #   save it in the gene subfolder and then reinitialize
-        cmd.save(os.path.join(self.section_dir, str(gene), "00_{}.pse".format(gene)))
-        cmd.reinitialize()
 
     def get_relevant_saav_table(self, gene=None, group=None):
         
@@ -724,15 +804,15 @@ class MoleculeOperations():
                     raise ValueError("{} in {} is not a valid attribute.".format(name, section))
 
 
-    def get_pdb_file(self, gene):
+    def get_protein_pdb(self, gene):
         """
         Returns the pdb file for a given gene.
         """ 
-        pdb_files = glob.glob(os.path.join(self.input_dir, "{}.all_in_one".format(gene), "*.pdb"))
-        if len(pdb_files) != 1:
-            raise ValueError("Expecting 1 pdb file but found {}".format(len(pdb_files)))
-        pdb_file = pdb_files[0]
-        return pdb_file
+        protein_pdbs = glob.glob(os.path.join(self.input_dir, "{}.all_in_one".format(gene), "*.pdb"))
+        if len(protein_pdbs) != 1:
+            raise ValueError("Expecting 1 pdb file but found {}".format(len(protein_pdbs)))
+        protein_pdb = protein_pdbs[0]
+        return protein_pdb
 
 
     def mkdirp(self, path):
@@ -985,3 +1065,10 @@ class Color():
     @staticmethod
     def is_it_a_column_color(color_scheme):
         return True if color_scheme in self.saav_table.columns.values else False
+
+class Timer():
+
+    def __init__(self):
+        self.start = time.time()
+    def timestamp(self):
+        print("{} seconds".format(time.time()-self.start))
