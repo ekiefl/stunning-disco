@@ -1,3 +1,4 @@
+import colour
 import ConfigParser
 import time
 import random
@@ -430,6 +431,8 @@ class MoleculeOperations():
                 saav_table_subset = self.get_relevant_saav_table()
                 self.colorObject = Color(saav_table_subset, self.pymol_config, self.section)
                 self.colorObject.export_legend(self.section_dir_pymol, "{}_legend.txt".format(section))
+                if self.section_dir_images:
+                    self.colorObject.export_legend(self.section_dir_images, "{}_legend.txt".format(section))
         #   loop through each gene
             self.loop_through_genes()
 
@@ -457,6 +460,8 @@ class MoleculeOperations():
                 saav_table_subset = self.get_relevant_saav_table(gene=gene)
                 self.colorObject = Color(saav_table_subset, self.pymol_config, self.section, gene=gene)
                 self.colorObject.export_legend(self.gene_dir_pymol, "00_{}_legend.txt".format(gene))
+                if self.gene_dir_images:
+                    self.colorObject.export_legend(self.gene_dir_images, "00_{}_legend.txt".format(gene))
         #   loop through each group
             self.loop_through_groups(gene)
 
@@ -478,6 +483,8 @@ class MoleculeOperations():
             self.do_all_saav_pse_things(saav_table_subset, gene, group)
         #   make an image for the group
             self.do_all_image_things(gene, group)
+        #   delete SAAVs from this group before starting next one
+            cmd.delete(group)
 
 
     def do_all_image_things(self, gene, group):
@@ -486,14 +493,9 @@ class MoleculeOperations():
     #   make directory for the group 
         group_dir = os.path.join(self.gene_dir_images, group)
         self.mkdirp(group_dir)
-
-    #   merge the pses
-        pse_list = [self.protein_pse_path, self.saav_pse_path]
-        self.join_pses(pse_list)
-    #   I can't believe this, but the alpha is messed up unless I do this
-    #   AFTER merging
-        #cmd.set("sphere_transparency", 0.0)
-        #cmd.set("sphere_transparency", 1.0)
+    #   I don't do this anymore, buth I could
+        #pse_list = [self.protein_pse_path, self.saav_pse_path]
+        #self.join_pses(pse_list)
 
     #   I could have sophisticated routines here for taking multiple images,
     #   collages, any view setting like orientation, etc. this really deserves
@@ -505,13 +507,17 @@ class MoleculeOperations():
         """
         saves a single png image
         """
+        cmd.orient()
         if self.ray:
         #   very costly!
             cmd.ray(self.res)
 
         save_path = os.path.join(group_dir,"{}.png".format(group))
         cmd.png(save_path)
-        cmd.reinitialize()
+
+    #   only if color_hierarchy == group do you make a legend (otherwise its higher in directory)
+        if self.color_hierarchy == "group":
+            self.colorObject.export_legend(os.path.join(self.gene_dir_images,group),"{}_legend.txt".format(group))
 
 
     def join_pses(self, pse_list):
@@ -556,38 +562,39 @@ class MoleculeOperations():
     #   if there are no SAAVs,just save an empty file
         if len(self.saav_properties.index) == 0:
             cmd.save(os.path.join(self.section_dir_pymol, str(gene), "{}.pse".format(group)), group)
-            cmd.reinitialize()
 
     #   otherwise do the stuff we were planning to
         else:
-        #   we have to load the pdb so we know where the amino acids are in space
-            cmd.load(self.protein_pdb_path)
 
-        #   define the selection of the SAAVs and create their object
+        #   define the selection of the SAAVs, create their object, then delete selection
             sites = "+".join([str(resi) for resi in self.saav_properties.index])
             cmd.select(group+"_sel","resi {}".format(sites))
             cmd.create(group,group+"_sel")
-
-        #   delete the protein
-            cmd.delete(os.path.splitext(os.path.basename(self.protein_pdb_path))[0])
+            cmd.delete("Gr02_C_sel")
 
             pymol.saav_properties = self.saav_properties
-            print(pymol.saav_properties["alpha"])
         #   change the color for each saav according to the saav_colors dict
             cmd.alter(group,"color = pymol.saav_properties.loc[int(resi),'color_indices']")
-            cmd.alter(group,"s.sphere_transparency = pymol.saav_properties.loc[int(resi),'alpha']")
-            cmd.set("sphere_scale", 2.0)
-            #cmd.alter(group,"s.sphere_scale = pymol.saav_properties.loc[int(resi),'radii']")
+
+            """ IMPORTANT: Pymol does not let you perform alter on both sphere_transparency
+            and sphere_scale without a massive memory leak. So here we just look at one 
+            at a time. By the way this is horrible but whatever. """
+            if self.pymol_config.get(self.section, "radii") == "radii" and self.pymol_config.get(self.section, "alpha") == "alpha":
+                cmd.set("sphere_scale", 2.0)
+                cmd.set("sphere_transparency", 0.0)
+            elif self.pymol_config.get(self.section, "radii") == "radii":
+                cmd.set("sphere_scale", 2.0)
+                cmd.alter(group,"s.sphere_transparency = pymol.saav_properties.loc[int(resi),'alpha']")
+            else:
+                cmd.set("sphere_transparency", 0.15)
+                cmd.alter(group,"s.sphere_scale = pymol.saav_properties.loc[int(resi),'radii']")
             cmd.rebuild()
 
         #   displays the spheres
-            cmd.hide()
-            cmd.show("spheres","name ca")
+            cmd.show("spheres","{} and name ca".format(group))
 
         #   save the file
             cmd.save(self.saav_pse_path, group)
-            cmd.reinitialize()
-
 
     def fill_saav_properties_table(self, saav_table_subset):
         """
@@ -674,7 +681,7 @@ class MoleculeOperations():
     #   add alpha column (my def of alpha is: 0 means opaque, 1 means translucent)
         saav_properties["alpha"] = 1 - saav_data[alpha_column]
     #   add radii column
-        min_r = 0.5; max_r = 3.0
+        min_r = 0.75; max_r = 2.5 
         saav_properties["radii"] = min_r + (max_r-min_r) * saav_data[radii_column]
 
         return saav_properties
@@ -691,7 +698,6 @@ class MoleculeOperations():
         self.protein_pse_path = os.path.join(self.section_dir_pymol, str(gene), "00_{}.pse".format(gene))
     #   save it in the gene subfolder and then reinitialize
         cmd.save(self.protein_pse_path)
-        cmd.reinitialize()
 
 
     def create_protein_pse_file(self):
@@ -704,16 +710,12 @@ class MoleculeOperations():
 
     #   All settings related to the protein .pse should be set here
         cmd.bg_color("white")
-        cmd.set("sphere_scale", "2")
         cmd.set("fog", "off")
         cmd.color("wheat", "scaffold")
         cmd.set("ray_trace_mode", "0")
         cmd.set("ray_opaque_background", "off")
         cmd.color("gray90", "surface")
-        cmd.set("cartoon_transparency",0.2)
-        #cmd.set("sphere_transparency", 1.0)
         #cmd.show("surface", "surface")
-        #cmd.set("transparency",0.9)
         cmd.show("cartoon", "scaffold")
         cmd.orient()
 
@@ -781,11 +783,6 @@ class MoleculeOperations():
         """ IMPORTANT: color_column either takes a string OR the boolean "False". Currently I just
         test whether the string = "False". Ideally I will convert to a boolean if the user input
         is the string "False" """
-
-    #   make sure all attributes are present in DEFAULT section
-        default_attributes = [x[0] for x in self.pymol_config.items("DEFAULT")]
-        if set(default_attributes) != set(required_defaults):
-            raise ValueError("DEFAULT must have exactly these attributes: {}".format(attributes_list))
 
         for section in self.pymol_config.sections():
 
@@ -901,8 +898,30 @@ class Color():
         """
         returns a colormap for self.color_column
         """
+
+        """ IMPORTANT: This is just some shitty code that colors the data in a specific
+        way for secondary structure and solvent accessibility.""" 
+
+        if self.color_column == "ss3":
+            def colormap(x):
+                #i = {"C":0, "E":1, "H":2, "U":3}
+                o = {0:[255./255,  102./255,  0./255],
+                     1:[155./255,  88./255, 165./255],
+                     2:[ 27./255, 158./255, 119./255],
+                     3:[222./255, 222./255, 222./255]}
+                return o[x]
+        
+        elif self.color_column == "solvent_acc":
+            def colormap(x):
+                #i = {"B":0, "E":1, "M":2, "U":3}
+                o = {0:[200./255,  48./255, 232./255],
+                     1:[44./255, 116./255, 211./255],
+                     2:[106./255,  48./255, 232./255],
+                     3:[222./255, 222./255, 222./255]}
+                return o[x]
+
     #   conditional for if the column has string-like data
-        if self.columntype == "strings":
+        elif self.columntype == "strings":
         #   number of distinct colors
             colormap = matplotlib.cm.get_cmap(self.color_scheme, len(self.template_data_for_colormap))
 
@@ -1000,7 +1019,7 @@ class Color():
         Takes SAAV table (already assumed to be subsetted according to
         gene and group) and returns the unique values
         """
-        template_data_for_colormap = self.saav_table[self.color_column].unique()
+        template_data_for_colormap = np.sort(self.saav_table[self.color_column].unique())
         return template_data_for_colormap
         
 
@@ -1016,7 +1035,7 @@ class Color():
         """
         """
         num_saavs = len(saav_data.index)
-
+            
     #   if a single pymol color was chosen by the user, we're done
         if self.pymol_colors:
             color_indices = [self.pymol_color_index for _ in range(num_saavs)]
@@ -1049,6 +1068,7 @@ class Color():
             color_index = [x[1] for x in cmd.get_color_indices() if x[0]==color_names[0]][0]
             color_indices.append(color_index)
             color_names.pop(0)
+        
         return color_indices
 
     @staticmethod
