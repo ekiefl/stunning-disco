@@ -1,4 +1,4 @@
-import colour
+from colour import Color as colour
 import ConfigParser
 import time
 import random
@@ -636,13 +636,13 @@ class MoleculeOperations():
         radii_column = self.pymol_config.get(self.section,"radii") 
 
     #   determine/define whether columns are string-type or number-type
-        string_or_number = {color_column : self.colorObject.columntype,
-                            alpha_column : "numbers",
-                            radii_column : "numbers"}
+        string_or_number = {color_column : self.colorObject.colorvariabletype,
+                            alpha_column : "numeric",
+                            radii_column : "numeric"}
 
     #   if number-type, take the mean. if string-type, take most frequent string
         def resolve_ambiguity(dtype):
-            if dtype == "numbers":
+            if dtype == "numeric":
                 return np.mean
             if dtype == "strings":
                 return lambda x: x.value_counts().idxmax()
@@ -855,27 +855,142 @@ class MoleculeOperations():
             raise ValueError("You have genes in your table that are missing in your raptorX \
             structure repository. Here are some that are missing: {}".format(missing_in_raptorx))
 
-
-
-
 class Color():
     
-    def __init__(self, saav_table, pymol_config, section, gene=None, group=None):
+    def __init__(self, saav_table, pymol_config, section):
 
     #   make input parameters class attributes
         self.saav_table = saav_table
         self.pymol_config = pymol_config
         self.section = section
-        self.gene = gene
-        self.group = group
 
     #   get color_scheme from pymol_config
         self.color_scheme = pymol_config.get(section,"color_scheme")
     #   get color_column from pymol_config
-        self.color_column = pymol_config.get(section,"color_column")
+        self.color_variable = pymol_config.get(section,"color_column")
+
+    #   create template data: an array of the unique entries
+        self.template_data_for_colormap = self.get_template_data()
+    #   determine datatype of template_data_for_colormap (is it a string or a number?)
+        self.colorvariabletype = self.find_colorvariabletype()
+
+    #   create colormap
+        self.colormap = self.create_colormap()
+
+    #   construct the colormap differently, depending the datatype of the column
+        self.create_color_list()
+
+
+    def create_color_list():
+        
+        if self.colorvariabletype == "numeric":
+            self.base_colors = self.default_color_scheme_repo(self.color_variable)
+        
+
+    def default_color_scheme_repo(var):
+        """
+        This repo stores default coloring schemes for common variables. These are
+        `default` because they can be overwritten by the user. If the variable is
+        numeric it returns a base_color list for the construction of a multi-color
+        gradient, and if the variable of string-like it directly returns the color
+        mapping.
+        """
+
+    #   numerical types
+        if var=="BLOSUM90" or var=="BLOSUM90_weighted" or \
+           var=="BLOSUM62" or var=="BLOSUM62_weighted":
+
+            base_colors = ["red", "white", "blue"]
+            return base_colors
+
+    #   string types
+        if var == "ss3":
+
+            def colormap(x):
+                #i = {"C":0, "E":1, "H":2, "U":3}
+                o = {0:[255./255,  102./255,  0./255],
+                     1:[155./255,  88./255, 165./255],
+                     2:[ 27./255, 158./255, 119./255],
+                     3:[222./255, 222./255, 222./255]}
+                return o[x]
+        
+        elif self.color_variable == "solvent_acc":
+            def colormap(x):
+                #i = {"B":0, "E":1, "M":2, "U":3}
+                o = {0:[200./255,  48./255, 232./255],
+                     1:[44./255, 116./255, 211./255],
+                     2:[106./255,  48./255, 232./255],
+                     3:[222./255, 222./255, 222./255]}
+                return o[x]
+
+        
+    def get_color_gradient(base_colors, gradations=100):
+        """
+        This function returns a list of all the colors for a multi-color gradient. It
+        is only called when working with numerical data. For qualitative/string data,
+        the analagous function is self.get_color_dictionary().
+        
+        INPUTS
+        ------
+        base_colors : list
+            This is a list of strings interpretable by the `colour` module as colors.  
+            If you want a 3-color gradient from red to white to blue, then base_colors
+            should be ["red", "white", "blue"], or [#ff0000, #ffffff, #0000ff].
+        gradations : integer
+            The approximate number of gradations asked for (It will not be exactly this
+            unless the modulus of gradiations%(n-1) == 0.)
+        """
+        n = len(base_colors)
+        if gradations // (n-1) < 2:
+        #   there is no work to do. just return the colors in base_colors as Color objects
+            return [colour(base_color) for base_color in base_colors]
+    
+        color_gradient = []
+        for i in range(1, n):
+    
+            fro = colour(base_colors[i-1])
+            to = colour(base_colors[i])
+    
+            color_gradient_interval = list(fro.range_to(to, gradations//(n-1)))   
+            if not i == n - 1: del color_gradient_interval[-1]
+            color_gradient.extend(color_gradient_interval)
+        return color_gradient
+
+
+
+
+    def get_template_data(self): 
+        """
+        Takes SAAV table (already assumed to be subsetted according to
+        gene and group) and returns the unique values
+        """
+        template_data_for_colormap = np.sort(self.saav_table[self.color_variable].unique())
+        return template_data_for_colormap
+
+    def find_colorvariabletype(self):
+        """
+        Determines the data type of the column (either string or number)
+        """
+    #   for some reason strings come up as type == object in pandas
+        return "strings" if self.template_data_for_colormap.dtype==object else "numeric"
+
+
+class Color2():
+    
+    def __init__(self, saav_table, pymol_config, section):
+
+    #   make input parameters class attributes
+        self.saav_table = saav_table
+        self.pymol_config = pymol_config
+        self.section = section
+
+    #   get color_scheme from pymol_config
+        self.color_scheme = pymol_config.get(section,"color_scheme")
+    #   get color_column from pymol_config
+        self.color_variable = pymol_config.get(section,"color_column")
 
     #   if the color_column is False, the color index for pymol color is stored and we're done
-        if self.color_column == "False":
+        if self.color_variable == "False":
             self.pymol_colors = True
             self.pymol_color_index = [x[1] for x in cmd.get_color_indices() if x[0]==self.color_scheme][0]
             return
@@ -885,7 +1000,7 @@ class Color():
     #   create template data: an array of the unique entries
         self.template_data_for_colormap = self.extract_unique_color_values()
     #   determine datatype of template_data_for_colormap (is it a string or a number?)
-        self.columntype = self.find_columntype()
+        self.colorvariabletype = self.find_colorvariabletype()
 
     #   create colormap
         self.colormap = self.create_colormap()
@@ -896,13 +1011,13 @@ class Color():
 
     def create_colormap(self):
         """
-        returns a colormap for self.color_column
+        returns a colormap for self.color_variable
         """
 
         """ IMPORTANT: This is just some shitty code that colors the data in a specific
         way for secondary structure and solvent accessibility.""" 
 
-        if self.color_column == "ss3":
+        if self.color_variable == "ss3":
             def colormap(x):
                 #i = {"C":0, "E":1, "H":2, "U":3}
                 o = {0:[255./255,  102./255,  0./255],
@@ -911,7 +1026,7 @@ class Color():
                      3:[222./255, 222./255, 222./255]}
                 return o[x]
         
-        elif self.color_column == "solvent_acc":
+        elif self.color_variable == "solvent_acc":
             def colormap(x):
                 #i = {"B":0, "E":1, "M":2, "U":3}
                 o = {0:[200./255,  48./255, 232./255],
@@ -921,7 +1036,7 @@ class Color():
                 return o[x]
 
     #   conditional for if the column has string-like data
-        elif self.columntype == "strings":
+        elif self.colorvariabletype == "strings":
         #   number of distinct colors
             colormap = matplotlib.cm.get_cmap(self.color_scheme, len(self.template_data_for_colormap))
 
@@ -937,11 +1052,11 @@ class Color():
         """
         Because either string or number data is accepted for coloring, this
         wrapper function is used to access the RGB values in self.colormap
-        depending on self.columntype. The tuple is converted into a list
+        depending on self.colorvariabletype. The tuple is converted into a list
         and only the first three elements are considered (the fourth is alpha)
         """
     #   string-type data
-        if self.columntype == "strings":
+        if self.colorvariabletype == "strings":
             return list(self.colormap(self.legend[value]))[:3]
     #   number-type data
         else:
@@ -958,8 +1073,8 @@ class Color():
         values that can be accessed by indices or by the value mapped to that
         index. For example, self.colormap(10) returns the 10th RGB value
         whereas self.colormap(10.0) returns the RGB which most closely matches
-        the value 10.0. When self.columntype == "numbers" we access RGB values the
-        second way, but when self.columntype == "strings" we access RGB values the
+        the value 10.0. When self.colorvariabletype == "numeric" we access RGB values the
+        second way, but when self.colorvariabletype == "strings" we access RGB values the
         first way. And in order to do that, we need to associate each index to
         a unique value in self.template_data_for_colormap. We do that with
         self.legend.  To spell it out fully, suppose
@@ -969,13 +1084,13 @@ class Color():
         for when column_name is provided.
         """
         legend = {}
-    #   if columntype = strings, a value must be defined for each color
-        if self.columntype == "strings":
+    #   if colorvariabletype = strings, a value must be defined for each color
+        if self.colorvariabletype == "strings":
             for ind, value in enumerate(self.template_data_for_colormap):
             #   index only first 3 since 4th is alpha
                 legend[value] = ind
 
-    #   if columntype = numbers, only the min and max need to be defined 
+    #   if colorvariabletype = numbers, only the min and max need to be defined 
         else:
             mini = self.template_data_for_colormap.min()
             maxi = self.template_data_for_colormap.max()
@@ -1019,16 +1134,16 @@ class Color():
         Takes SAAV table (already assumed to be subsetted according to
         gene and group) and returns the unique values
         """
-        template_data_for_colormap = np.sort(self.saav_table[self.color_column].unique())
+        template_data_for_colormap = np.sort(self.saav_table[self.color_variable].unique())
         return template_data_for_colormap
         
 
-    def find_columntype(self):
+    def find_colorvariabletype(self):
         """
         Determines the data type of the column (either string or number)
         """
     #   for some reason strings come up as type == object in pandas
-        return "strings" if self.template_data_for_colormap.dtype==object else "numbers"
+        return "strings" if self.template_data_for_colormap.dtype==object else "numeric"
 
 
     def create_color_indices_for_group(self, saav_data):
@@ -1063,7 +1178,7 @@ class Color():
 
         color_indices = []
         for resi in saav_data.index:
-            rgb = self.access_colormap(saav_data.loc[resi, self.color_column])
+            rgb = self.access_colormap(saav_data.loc[resi, self.color_variable])
             cmd.set_color(color_names[0], rgb)
             color_index = [x[1] for x in cmd.get_color_indices() if x[0]==color_names[0]][0]
             color_indices.append(color_index)
@@ -1073,8 +1188,8 @@ class Color():
 
     @staticmethod
     def is_it_a_pymol_color(color_scheme):
-        pymol_colors = cmd.get_color_indices()
         pymol_colors = [x[0] for x in pymol_colors]
+        pymol_colors = cmd.get_color_indices()
         return True if color_scheme in pymol_colors else False
 
     @staticmethod
