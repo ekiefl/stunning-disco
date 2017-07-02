@@ -1,7 +1,6 @@
 import variants.snv
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import utils as ut
 
 def snv_rarefaction_curves(df, c, genome_wide=True, c_gene=None, genome_len=None):

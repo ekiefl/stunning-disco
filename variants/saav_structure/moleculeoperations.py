@@ -1,6 +1,7 @@
+import random
 from colour import Color as colour
 import ConfigParser
-import random
+import inspect
 import numpy as np
 import pandas as pd
 import os
@@ -25,7 +26,7 @@ class AddRaptorXProperty():
             gene_id3.all_in_one
                 ...
             ...
-    Each folder gene_id#.all_in_one is the standard output from each of the 
+    Each folder gene_id#.all_in_one is the standard output from each of the
     RaptorX job submissions.
 
     If you want to add another method that adds columns to the SAAV table, you
@@ -401,6 +402,7 @@ class MoleculeOperations():
 
         #   create folder for section if doesn't exist
             self.section = section
+            self.groups = self.get_group_list()
             self.section_dir = os.path.join(self.output_dir, os.path.basename(os.path.splitext(self.saav_table_fname)[0]), section)
             self.mkdirp(self.section_dir)
         #   within the section, create two subdirectories: 1 for PyMOL 1 for images
@@ -453,7 +455,7 @@ class MoleculeOperations():
         #   color/recolor if appropriate
             if self.color_hierarchy == "gene":
                 saav_table_subset = self.get_relevant_saav_table(gene=gene)
-                self.colorObject = Color(saav_table_subset, self.pymol_config, self.section, gene=gene)
+                self.colorObject = Color(saav_table_subset, self.pymol_config, self.section)
                 self.colorObject.export_legend(self.gene_dir_pymol, "00_{}_legend.txt".format(gene))
                 if self.gene_dir_images:
                     self.colorObject.export_legend(self.gene_dir_images, "00_{}_legend.txt".format(gene))
@@ -464,14 +466,14 @@ class MoleculeOperations():
     def loop_through_groups(self, gene):
         """
         """
-        groups = self.get_group_list(self, self.section)
+        groups = self.groups
         for group in groups:
 
         #   subset the saav_table to include only group and gene
             saav_table_subset = self.get_relevant_saav_table(gene=gene, group=group)
         #   color/recolor if appropriate
             if self.color_hierarchy == "group":
-                self.colorObject = Color(saav_table_subset, self.pymol_config, self.section, gene=gene, group=group)
+                self.colorObject = Color(saav_table_subset, self.pymol_config, self.section)
                 self.colorObject.export_legend(os.path.join(self.gene_dir_pymol),"{}_legend.txt".format(group))
 
         #   make the saav .pse
@@ -729,12 +731,12 @@ class MoleculeOperations():
         return saav_table_subset
 
 
-    def get_group_list(self, gene_saav_table, section):
+    def get_group_list(self):
         """
         Returns a list of the unique elements in the SAAV table column specified
         by the "group_by" attribute in self.pymol_config_fname.
         """
-        return list(self.table.saav_table[self.pymol_config.get(section, "group_by")].unique())
+        return list(self.table.saav_table[self.pymol_config.get(self.section, "group_by")].unique())
 
 
     def load_and_validate_pymol_config_file(self):
@@ -859,6 +861,10 @@ class Color():
         self.pymol_config = pymol_config
         self.section = section
 
+    #   load HTML color codes and names
+    #   (from https://github.com/codebrainz/color-names/blob/master/output/colors.csv)
+        self.load_color_db()
+
     #   get color_variable from pymol_config
         self.color_variable = pymol_config.get(section,"color_variable")
 
@@ -882,6 +888,21 @@ class Color():
 
         if self.colorvariabletype == "numeric":
             return list(self.numeric_map(x).rgb)
+
+    def load_color_db(self):
+        """
+        This loads 866 named colors present on
+        https://en.wikipedia.org/wiki/List_of_colors:_A%E2%80%93F and compiled
+        into csv format here:
+        https://github.com/codebrainz/color-names/blob/master/output/colors.csv
+        Useful for string-like data with lots of possible options, for e.g.
+        competing AAs. The database is assumed to be in the same directory
+        as moleculeoperations.py
+        """
+        fdir = os.path.dirname(inspect.getfile(self.__class__))
+        fname = "colors.csv"
+        color_db = pd.read_csv(os.path.join(fdir, fname), names = ("name1","name2","hex","r","g","b"))
+        self.color_db = dict(zip(list(color_db["name1"].values), list(color_db["hex"])))
 
     def create_colors(self):
         """
@@ -933,6 +954,16 @@ class Color():
         if var == "solvent_acc":
             color_dict = {"B":"#ff00f2", "M":"#17becf", "E":"#004de8", "U":"#e8e9ea"}
             return color_dict
+
+    #   this is somewhat of a special case since there are too many colors. I just randomly pick 
+    #   colors from self.color_db. 
+        if var == "competing_aas":
+            hex_codes = random.sample(self.color_db.values(), len(self.template_data))
+            color_dict = dict(zip(self.template_data, hex_codes))
+            return color_dict
+            
+    
+            
 
     def get_color_gradient(self):
         """
@@ -1024,33 +1055,23 @@ class Color():
         """
         """
         num_saavs = len(saav_data.index)
-            
-        ############ AVOID DIRECT EYE CONTACT ############
+           
         """IMPORTANT: PyMOL won't let me define color names that contain any
-        numbers whatsoever so I have to name the color of each SAAV some random
-        and unique alphabetic string. This sucks and I'm pissed.  Here's this
-        piece of shit code that generates a set of random unique alphabetic
-        strings. lol."""
-        def generate(unique):
-            chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-            while True:
-                value = "".join(random.choice(chars) for _ in range(5))
-                if value not in unique:
-                    unique.append(value)
-                    break
-        color_names = []
-        for _ in range(num_saavs):
-            generate(color_names)
+        numbers whatsoever so I have to name the color of each SAAV some 
+        unique alphabetic string. This sucks and I'm pissed. """
 
-        ############ AVOID DIRECT EYE CONTACT ############
+        alphabet = ["A","B","C","D","E","F","G","H","I","J"]
+        color_names = [first + second + third for third in alphabet for second in alphabet for first in alphabet]
+        color_names = color_names[:num_saavs]
 
         color_indices = []
+        i = 0
         for resi in saav_data.index:
             rgb = self.access_color(saav_data.loc[resi, self.color_variable])
-            cmd.set_color(color_names[0], rgb)
-            color_index = [x[1] for x in cmd.get_color_indices() if x[0]==color_names[0]][0]
+            cmd.set_color(color_names[i], rgb)
+            color_index = [x[1] for x in cmd.get_color_indices() if x[0]==color_names[i]][0]
             color_indices.append(color_index)
-            color_names.pop(0)
+            i += 1
         
         return color_indices
 
