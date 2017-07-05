@@ -875,6 +875,10 @@ class Color():
     #   if string-like, it is all unique entries
         self.template_data = self.get_template_data()
 
+        print(self.color_variable)
+        print(self.colorvariabletype)
+        print(self.template_data)
+
     #   construct the colormap differently, depending the datatype of the column
         self.create_colors()
 
@@ -940,11 +944,14 @@ class Color():
 
         red_to_blue = (["#a03129","#fcf5f4","#ffffff","#e8edf9", "#264799"],[50,25,25,50])
         darkred_to_darkblue = (["#7c0b03","#fcf5f4","#ffffff","#e8edf9", "#133382"],[50,25,25,50])
-
+        white_to_bloodred = (["#bc0000","#fceaea"]),[150]
 
     #   numerical types
         if var=="BLOSUM90" or var=="BLOSUM90_weighted" or var=="BLOSUM62" or var=="BLOSUM62_weighted":
             return darkred_to_darkblue
+
+        if var=="kullback_leibler_divergence_normalized" or var=="kullback_leibler_divergence_raw":
+            return white_to_bloodred
 
     #   string types
         if var == "ss3":
@@ -961,9 +968,7 @@ class Color():
             hex_codes = random.sample(self.color_db.values(), len(self.template_data))
             color_dict = dict(zip(self.template_data, hex_codes))
             return color_dict
-            
-    
-            
+
 
     def get_color_gradient(self):
         """
@@ -987,8 +992,7 @@ class Color():
             green. The sum of the entries are therefore the total number of color self.gradations
             expected.
         """
-    
-        
+
         n = len(self.base_colors)
     
     #   if int-like self.gradations is passed, transform into array-like
@@ -1021,10 +1025,8 @@ class Color():
         This map converts a numeric value to Color object in self.color_gradient.
         """
         n = len(self.color_gradient)
-        m = self.template_data[0]
-        M = self.template_data[1]
 
-        numeric_range = np.linspace(m,M,n)
+        numeric_range = np.linspace(self.template_data[0], self.template_data[1], n)
         nearest_idx = np.abs(x - numeric_range).argmin()
         return self.color_gradient[nearest_idx]
 
