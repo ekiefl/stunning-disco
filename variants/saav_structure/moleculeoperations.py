@@ -1102,4 +1102,169 @@ class Color():
         text_legend.close()
 
 
+class Config:
+    """
+    The format of this file should be standard INI format. an example would be
 
+        [<perspective1>]
+        # <perspective1> should be a name that describes or summarizes the below parameters
+        color_var     = <a column name from SAAV table>
+        radii_var     = <a column name from SAAV table>
+        alpha_var     = <a column name from SAAV table>
+        color_scheme  = <a recognized keyword for color mappings, a default exists for each accepted color_var variable>
+        radii_range   = <"x, y", where x is the the lower radius value and y is the upper, default = 0.65, 2.6
+        alpha_range   = <"x, y", where x is the the lower radius value and y is the upper, default = 0.00, 0.85
+        sidechain     = <whether or not sidechains of the variants are visible>
+        color_hierarchy  = <global, gene, group>
+
+        [<perspective1>]
+        ...
+    """
+    
+    """ IMPORTANT: The indexing syntax for configparser is fundamentally
+    different between python2 and python3. Once we start running pymol
+    through python 3, this syntax will have to be imported over. """
+    
+    def __init__(self, config_fname):
+
+    #   make input parameters options
+        self.config_fname = config_fname
+
+    #   load the config file
+        self.config = self.load_config_file(config)
+
+    #   instantiate default values
+
+    #   all possible options for a given perspective are given here
+        self.options_list   = ["color_var",
+                               "radii_var",
+                               "alpha_var",
+                               "color_scheme",
+                               "radii_scheme",
+                               "alpha_scheme",
+                               "color_hierarchy",
+                               "sidechain"]
+
+    #   sanity check
+    #   which options are present, which are not
+
+        for section in self.config.sections():
+
+        #   don't allow whitespace in section names
+            if " " in section:
+                raise ValueError("Please no whitespace in section names.")
+
+            for name, value in self.config.items(section):
+            #   demand all user options are in options_list
+                if name not in self.options_list:
+                    raise ValueError("{} in {} is not a valid attribute.".format(name, section))
+
+
+    def attack_then_fix_config_structure(self):
+        """
+        ...make them believe, that offensive operations, often times, is the
+           surest, if not the only (in some cases) means of defence - George Washington, 1799
+        """
+
+    #   check each section name is unique
+        if len(self.config.sections()) != len(set(self.config.sections())):
+            raise ValueError(("At least one of your perspectives has a name occuring more than once. Well, if we're "
+                              "getting technical, at least two of your perspectives have a name occuring more than once."))
+
+    #   check the integrity of each perspective
+        for section in self.config.sections():
+            
+        #   list of all options in the section
+            options_in_section = self.config.options(section)
+
+        #   don't allow whitespace in perspective names because why the fuck would you put whitespace in your perspective names?
+            if section.strip() is not section:
+                raise ValueError("Why would you put whitespace in your section name? That's not rhetorical. Why? Seriously?")
+
+        #   disallow a pymol_variable (color, alpha, radii) as being both variable and static
+            if ("color_var" in options_in_section and "color_static" in options_in_section) or \
+               ("radii_var" in options_in_section and "radii_static" in options_in_section) or \
+               ("alpha_var" in options_in_section and "alpha_static" in options_in_section):
+                raise ValueError(("You cannot specify color, radii, or alpha as being both variable and static, "
+                                     "(e.g. you can't have both the options color_var and color_static), but you've "
+                                     "done so in perspective {}.".format(section)))
+
+        #   you can't specify a scheme or range if no variable option (..._var) is specified
+            if ("color_scheme" in options_in_section and "color_var" not in options_in_section) or \
+               ("radii_range"  in options_in_section and "radii_var" not in options_in_section) or \
+               ("alpha_range"  in options_in_section and "alpha_var" not in options_in_section):
+                raise ValueError(("You can't specify a scheme or range (e.g color_scheme) without also specifying "
+                                  "the corresponding variable (color_var), but you've done so in perspective {}".format(section)))
+
+
+            """The composition of options in section is sound. Now adding defaults where they are needed"""
+
+
+        #   if neither _var or _static options were not provided for any of color, alpha, and radii, static default is set
+            if ("color_var" not in options_in_section and "color_static" not in options_in_section):
+                self.config.set(section, "color_static", self.option_defaults["color_static"])
+
+            if ("radii_var" not in options_in_section and "radii_static" not in options_in_section):
+                self.config.set(section, "radii_static", self.option_defaults["radii_static"])
+
+            if ("alpha_var" not in options_in_section and "alpha_static" not in options_in_section):
+                self.config.set(section, "color_static", self.option_defaults["color_static"])
+
+        #   if color_scheme, radii_range, and alpha_range are not provided (but corresponding _vars are, defaults are set)
+            if ("color_var" in options_in_section and "color_scheme" not in options_in_section):
+                self.config.set(section, "color_static", self.option_defaults["color_scheme"])
+
+            if ("radii_var" in options_in_section and "radii_range" not in options_in_section):
+                self.config.set(section, "radii_static", self.option_defaults["radii_range"])
+
+            if ("alpha_var" in options_in_section and "alpha_range" not in options_in_section):
+                self.config.set(section, "color_static", self.option_defaults["color_range"])
+
+        #   All other non-dependent variables (sidechain, protein color, yada, yada, yada)
+            if "sidechain" not in options_in_section:
+                self.config.set(section, "sidechain", self.option_defaults["sidechain"])
+
+
+            """All defaults have been added. Now going through the value for each option to make sure its valid"""
+
+
+            for option, value in self.config.items(section):
+                
+            #   raise hell if user provided options outside of self.options
+                if option not in self.options_list:
+                    raise ValueError("{} in {} isn't a valid option.".format(option, section))
+
+            ############## INCOMPLETE #################
+
+
+    def get_default_dictionary(self):
+        """
+        This dictionary holds the defaults for all the parameters. They are
+        only added to perspectives if set explicitly.  What I mean is, if you
+        don't provide color_static (for example), this default isn't
+        necessarily set. Whether or not it is depends on the logic defined in
+        self.attack_config_structure(). For exammple, in the case of
+        color_static, it is defined only if color_static and color_var are both
+        not specified.
+        """
+        defaults = {"color_static" : "#842f68",
+                    "radii_static" : "2",
+                    "alpha_static" : "0.85",
+                    "sidechain"    : "no",
+                    "color_scheme" : "darkred_to_darkblue",
+                    "radii_range"  : "0.65, 2.60",
+                    "alpha_range"  : "0.10, 0.90"}
+        return defaults
+
+
+    def load_config_file(self):
+
+    #   check that it exists
+        if not os.path.isfile(self.pymol_config_fname):
+            raise("{} isn't even a file".format(self.pymol_config_name))
+
+    #   load as ConfigParser object
+        config = ConfigParser.ConfigParser()
+        config.read(self.config_fname)
+
+        return config
