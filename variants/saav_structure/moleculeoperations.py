@@ -1,3 +1,4 @@
+import time
 import random
 from colour import Color as colour
 import ConfigParser
@@ -271,11 +272,36 @@ class VariantsTable():
     #   get array of columns that exist in this table
         self.columns = self.get_columns()
 
+    def merge_DataFrame(self, merger):
+        """
+        This function simply merges the information from a DataFrame into the 
+        SAAV table. An obvious requirement is that at least one of the column
+        names of the merging DataFrame are found in the SAAV table. This function
+        is just a wrapper for the pd.merge(df1, df2) method in Pandas.
+
+        INPUTS
+        ------
+        merger : pandas DataFrame
+            a pandas DataFrame with at least one column name that's found in 
+            self.saav_table.
+        
+        """
+
+    #   make sure at least one column name is shared
+        shared_columns = [x for x in list(merger.columns) if x in list(self.saav_table.columns)]
+        if len(shared_columns) == 0:
+            raise ValueError("The DataFrame you are trying to merge shares no columns with the SAAV table.")
+
+    #   merge the columns
+        self.saav_table = pd.merge(self.saav_table, merger)
+
+
     def get_columns(self):
         """
         Defines an array of the columns in self.saav_table
         """
         return self.saav_table.columns.values
+
 
     def load_genes_file_as_list(self):
         """
@@ -290,6 +316,7 @@ class VariantsTable():
                 raise ValueError("Your genes-list path sucks")
             return [int(x.strip()) for x in open(self.genes_list_fname).readlines()]
 
+
     def load_samples_file_as_list(self):
         """
         You really don't know?
@@ -303,6 +330,7 @@ class VariantsTable():
                 raise ValueError("Your samples-list path sucks")
             return [int(x.strip()) for x in open(self.samples_list_fname).readlines()]
 
+
     def filter_table(self, column, elements):
         """
         This function filters the SAAV table according to single column criteria,
@@ -310,6 +338,7 @@ class VariantsTable():
         accepted elements in that column. All other rows are filtered
         """
         self.saav_table = self.saav_table[self.saav_table[column].isin(elements)]
+
 
     def simplify_sample_ids(self):
         """
@@ -326,6 +355,7 @@ class VariantsTable():
         else:
             raise ValueError("fuck you, man")
 
+
     def load(self):
         """
         Load the SAAV table output from gen-variability-profile.
@@ -333,6 +363,7 @@ class VariantsTable():
         if not self.saav_table_fname:
             raise ValueError("fuck you... you ass")
         self.saav_table = pd.read_csv(self.saav_table_fname, sep='\t', header=0, index_col=False)
+
 
     def save(self):
         """
@@ -358,7 +389,8 @@ class MoleculeOperations():
         self.output_dir = A("output-dir")
         self.input_dir = A("input-dir")
         self.color_vars = A("color-vars")
-        self.pymol_config_fname = A("pymol-config")
+        self.config_fname = A("pymol-config")
+        self.sample_groups_fname = A("sample-groups")
         self.saav_table_fname = A("saav-table")
         self.no_images = A("no-images")
         self.ray = A("ray")
@@ -370,17 +402,27 @@ class MoleculeOperations():
     #   make sure the input_dir is in good shape
         self.validate_input_dir(self.input_dir, self.table)
 
+    #   create sample_groups DataFrame
+        """ sample_groups.txt very importantly holds any information about how
+        the samples may group together. For example, the results from
+        clustering algorithms, geographic regions, cohort, or patient groupings """
+        self.get_sample_groups()
+
+    #   defines dictionary for how .gif's and .png's are named, based on groupings
+        self.get_sample
+
+    #   merge sample_groups.txt information into the saav_table
+        self.table.merge_DataFrame(self.sample_groups)
+
     #   load pymol_config file as ConfigParse object and validate its logic
         """ For now, all I do is load the settings. Later I will make sure all
-        of the logic works out. data type in each column (e.g. sidechain is
-        Boolean), radii and alpha should deal with scalar data, if
-        group_by should be qualitative. """
-        self.load_and_validate_pymol_config_file()
+        of the logic works out. """
+        self.config = Config(self.config_fname)
         
     #   create columns if they don't exist in saav-table already
-        """ For now, I will assume any columns mentioned in self.pymol_config
+        """ From now, I will assume any columns mentioned in self.config.config_dict
         already exist in self.table. Later I will have to make a list of
-        columns found in pymol_config, and tag to each a class and
+        columns found in the config file, and tag to each a class and
         corresponding method responsible for appending them to saav_table. Then
         I will call each of those classes with a method_list parameter, e.g.
         AddRaptorXProperty(self.table, methods_list, args). Each Add class should
@@ -388,103 +430,133 @@ class MoleculeOperations():
 
     #   create the output directory if it doesn't already exist
         self.mkdirp(self.output_dir)
-        self.mkdirp(os.path.join(self.output_dir, os.path.basename(os.path.splitext(self.saav_table_fname)[0])))
 
-    #   loop_through_sections calls loop_through_genes which calls loop_through_groups
-        self.loop_through_sections()
+    #   loop_through_perspectives calls loop_through_genes which calls loop_through_groupings
+        self.loop_through_perspectives()
 
 
-    def loop_through_sections(self):
+    def loop_through_perspectives(self):
         """
-        creates pse files for all sections in pymol_config
+        1) Makes perspective directory and PyMOL and Images subdirectories
+        2) Instantiates colorObject if self.color_hierarchy=="global"
+        3) Calls self.loop_through_genes()
         """
-        for section in self.pymol_config.sections():
+        for perspective in self.config.config_dict.keys():
 
-        #   create folder for section if doesn't exist
-            self.section = section
-            self.groups = self.get_group_list()
-            self.section_dir = os.path.join(self.output_dir, os.path.basename(os.path.splitext(self.saav_table_fname)[0]), section)
-            self.mkdirp(self.section_dir)
-        #   within the section, create two subdirectories: 1 for PyMOL 1 for images
-            self.section_dir_pymol = os.path.join(self.section_dir, "PyMOL")
+        #   create folder for perspective if doesn't exist
+            self.perspective = perspective
+            self.perspective_dir = os.path.join(self.output_dir, perspective)
+            self.mkdirp(self.perspective_dir)
+
+        #   within the perspective, create two subdirectories: 1 for PyMOL 1 for images
+            self.perspective_dir_pymol = os.path.join(self.perspective_dir, "PyMOL")
             if not self.no_images:
-                self.section_dir_images = os.path.join(self.section_dir, "Images")
-                self.mkdirp(self.section_dir_images)
-            self.mkdirp(self.section_dir_pymol)
+                self.perspective_dir_images = os.path.join(self.perspective_dir, "Images")
+                self.mkdirp(self.perspective_dir_images)
+            self.mkdirp(self.perspective_dir_pymol)
 
-        #   This is where the "color_hierarchy" attribute comes in. colormap is
-        #   the colormap used to color the groups and it is redefined based on
-        #   the color_hierarchy attribute. If color_hierarchy = global, then
-        #   colormap is defined only once (all genes use the same colormap) If
-        #   color_hierarchy = gene, then colormap is redefined for every gene.
-        #   Finally, if color_hierarchy = group, then colormap is redefined for
-        #   every group. The last would be useful if you you're coloring by
-        #   competing_aas and there are more than, say, 40 AASs per gene. To
-        #   avoid colormap being redefined inappropriately, self.get_colormap
-        #   is always called conditioned by color_hierarchy being either
-        #   global, gene, or group
-            self.color_hierarchy = self.pymol_config.get(section, "color_hierarchy")
+        #   This is where the "color_hierarchy" attribute comes in.
+        #   colorObject, which determines how the SAAVs are colored, is
+        #   reinstantiated based on the color_hierarchy attribute. If
+        #   color_hierarchy = global, then colorObject is instantiated only
+        #   once (all genes use the same coloring scheme, max/min values, etc.)
+        #   If color_hierarchy = gene, then colorObject is reinstantiated for
+        #   every gene.  Finally, if color_hierarchy = group, then colorObject
+        #   is reinstantiated for every group. The last would be useful if you
+        #   you're coloring by competing_aas and there are more than, say, 40
+        #   AASTs per gene. To avoid colorObject being reinstantiated
+        #   inappropriately, self.get_colormap is always called conditioned by
+        #   color_hierarchy being either global, gene, or group
+            self.color_hierarchy = self.config.config_dict.get(perspective, "color_hierarchy")
             if self.color_hierarchy == "global":
                 saav_table_subset = self.get_relevant_saav_table()
-                self.colorObject = Color(saav_table_subset, self.pymol_config, self.section)
-                self.colorObject.export_legend(self.section_dir_pymol, "{}_legend.txt".format(section))
-                if self.section_dir_images:
-                    self.colorObject.export_legend(self.section_dir_images, "{}_legend.txt".format(section))
+                self.colorObject = Color(saav_table_subset, self.config.config_dict, self.perspective)
+                self.colorObject.export_legend(self.perspective_dir_pymol, "{}_legend.txt".format(perspective))
+                if self.perspective_dir_images:
+                    self.colorObject.export_legend(self.perspective_dir_images, "{}_legend.txt".format(perspective))
         #   loop through each gene
             self.loop_through_genes()
 
 
     def loop_through_genes(self):
+        """
+        1. Makes a gene subdirectory within Images and PyMOL
+        2. Generates the protein .pse file
+        3. Instantiate colorObject if self.color_hierarchy=="gene"
+        4. Call self.loop_through_groupings()
+        """
     
         for gene in self.table.genes:
 
-            print("Currently on SECTION: {}, GENE: {}".format(self.section, gene))
+            print("Currently on SECTION: {}, GENE: {}".format(self.perspective, gene))
+            
+            self.gene = gene
         
         #   get access to protein_pdb
-            self.protein_pdb_path = self.get_protein_pdb(gene)
+            self.protein_pdb_path = self.get_protein_pdb()
+
         #   make pymol directory for the gene
-            self.gene_dir_pymol = os.path.join(self.section_dir_pymol, str(gene))
+            self.gene_dir_pymol = os.path.join(self.perspective_dir_pymol, str(self.gene))
             self.mkdirp(self.gene_dir_pymol)
+
         #   make image directory for the gene
             if not self.no_images:
-                self.gene_dir_images = os.path.join(self.section_dir_images, str(gene))
+                self.gene_dir_images = os.path.join(self.perspective_dir_images, str(self.gene))
                 self.mkdirp(self.gene_dir_images)
 
         #   make the protein .pse 
-            self.do_all_protein_pse_things(gene)
+            self.do_all_protein_pse_things()
+
         #   color/recolor if appropriate
             if self.color_hierarchy == "gene":
-                saav_table_subset = self.get_relevant_saav_table(gene=gene)
-                self.colorObject = Color(saav_table_subset, self.pymol_config, self.section)
-                self.colorObject.export_legend(self.gene_dir_pymol, "00_{}_legend.txt".format(gene))
+                saav_table_subset = self.get_relevant_saav_table(gene=self.gene)
+                self.colorObject = Color(saav_table_subset, self.config.config_dict, self.perspective)
+                self.colorObject.export_legend(self.gene_dir_pymol, "00_{}_legend.txt".format(self.gene))
                 if self.gene_dir_images:
-                    self.colorObject.export_legend(self.gene_dir_images, "00_{}_legend.txt".format(gene))
-        #   loop through each group
-            self.loop_through_groups(gene)
+                    self.colorObject.export_legend(self.gene_dir_images, "00_{}_legend.txt".format(self.gene))
+
+        #   loop through each grouping
+            self.loop_through_groupings()
 
 
-    def loop_through_groups(self, gene):
+    def loop_through_groupings(self):
         """
+        Some definitions are needed here for readability.
+
+            groupings : a list of all the groupings, e.g. "sample_id", "cohort", "environment", "region", etc.
+            grouping  : a single element of groupings, e.g. "cohort"
+            members   : a list of all the categories for a grouping. For example, the grouping "cohort"
+                        could have the members "cohort1", "cohort2" and "cohort3"
+            member    : a single element of members, i.e. "cohort1"
+
         """
-        groups = self.groups
-        for group in groups:
+        
+    #   get groupings from sample_groups and loop through them
+        self.groupings = self.sample_groups.columns.values
+        for grouping in self.groupings:
+        
+            self.grouping = grouping
+            
+        #   get members from the grouping and loop through them
+            self.members = self.sample_groups[self.grouping].unique()
+            for member in self.members:
 
-        #   subset the saav_table to include only group and gene
-            saav_table_subset = self.get_relevant_saav_table(gene=gene, group=group)
-        #   color/recolor if appropriate
-            if self.color_hierarchy == "group":
-                self.colorObject = Color(saav_table_subset, self.pymol_config, self.section)
-                self.colorObject.export_legend(os.path.join(self.gene_dir_pymol),"{}_legend.txt".format(group))
+                self.member = member
 
-        #   make the saav .pse
-            self.do_all_saav_pse_things(saav_table_subset, gene, group)
-        #   make an image for the group
-            self.do_all_image_things(gene, group)
-        #   delete SAAVs from this group before starting next one
-            cmd.delete(group)
+            #   subset the saav_table to include only group and gene
+                saav_table_subset = self.get_relevant_saav_table(gene=self.gene, member=self.member)
+
+            #   make the saav .pse
+                self.do_all_saav_pse_things(saav_table_subset, group)
+
+            #   make an image for the group
+                self.do_all_image_things(group)
+
+            #   delete SAAVs from this group before starting next one
+                cmd.delete(group)
 
 
-    def do_all_image_things(self, gene, group):
+    def do_all_image_things(self, group):
         """
         """
     #   make directory for the group 
@@ -497,10 +569,10 @@ class MoleculeOperations():
     #   I could have sophisticated routines here for taking multiple images,
     #   collages, any view setting like orientation, etc. this really deserves
     #   its own class. Instead I'll just call this 1-liner that saves the image
-        self.create_image_file(gene, group, group_dir) 
+        self.create_image_file(group, group_dir) 
         
 
-    def create_image_file(self, gene, group, group_dir):
+    def create_image_file(self, group, group_dir):
         """
         saves a single png image
         """
@@ -534,7 +606,7 @@ class MoleculeOperations():
             cmd.load(pse,partial=1)
 
 
-    def do_all_saav_pse_things(self, saav_table_subset, gene, group):
+    def do_all_saav_pse_things(self, saav_table_subset, group):
         """
         This function creates creates a saav .pse file for each group, and then
         saves the file.
@@ -543,10 +615,10 @@ class MoleculeOperations():
         self.saav_properties = self.fill_saav_properties_table(saav_table_subset)
 
     #   create save directory for the saav pse
-        self.saav_pse_path = os.path.join(self.section_dir_pymol, str(gene), "{}.pse".format(group))
+        self.saav_pse_path = os.path.join(self.perspective_dir_pymol, str(self.gene), "{}.pse".format(group))
 
     #   create the file
-        self.create_saav_pse_file(gene, group)
+        self.create_saav_pse_file(group)
 
     def create_saav_pse_file(self, gene, group):
     
@@ -558,7 +630,7 @@ class MoleculeOperations():
 
     #   if there are no SAAVs,just save an empty file
         if len(self.saav_properties.index) == 0:
-            cmd.save(os.path.join(self.section_dir_pymol, str(gene), "{}.pse".format(group)), group)
+            cmd.save(os.path.join(self.perspective_dir_pymol, str(self.gene), "{}.pse".format(group)), group)
 
     #   otherwise do the stuff we were planning to
         else:
@@ -576,10 +648,10 @@ class MoleculeOperations():
             """ IMPORTANT: Pymol does not let you perform alter on both sphere_transparency
             and sphere_scale without a massive memory leak. So here we just look at one 
             at a time. By the way this is horrible but whatever. """
-            if self.pymol_config.get(self.section, "radii") == "radii" and self.pymol_config.get(self.section, "alpha") == "alpha":
+            if self.config.config_dict.get(self.perspective, "radii") == "radii" and self.config.config_dict.get(self.perspective, "alpha") == "alpha":
                 cmd.set("sphere_scale", 2.0)
                 cmd.set("sphere_transparency", 0.0)
-            elif self.pymol_config.get(self.section, "radii") == "radii":
+            elif self.config.config_dict.get(self.perspective, "radii") == "radii":
                 cmd.set("sphere_scale", 2.0)
                 cmd.alter(group,"s.sphere_transparency = pymol.saav_properties.loc[int(resi),'alpha']")
             else:
@@ -629,8 +701,8 @@ class MoleculeOperations():
 
     #   rebrand the column names for style points
         color_variable = self.colorObject.color_variable
-        alpha_column = self.pymol_config.get(self.section,"alpha")
-        radii_column = self.pymol_config.get(self.section,"radii") 
+        alpha_column = self.config.config_dict.get(self.perspective,"alpha")
+        radii_column = self.config.config_dict.get(self.perspective,"radii") 
 
     #   determine/define whether columns are string-type or number-type
         string_or_number = {color_variable : self.colorObject.colorvariabletype,
@@ -686,7 +758,8 @@ class MoleculeOperations():
 
         return saav_properties
 
-    def do_all_protein_pse_things(self, gene):
+
+    def do_all_protein_pse_things(self):
         """
         This function creates a directory for the gene if it doesn't exist, locates
         the .pdb file, loads in in a pymol session, applies all programmed settings,
@@ -695,7 +768,7 @@ class MoleculeOperations():
     #   loads pdb file into pymol, applies default settings, and saves
         self.create_protein_pse_file()
     #   the protein is in the PyMOL state. now I save it
-        self.protein_pse_path = os.path.join(self.section_dir_pymol, str(gene), "00_{}.pse".format(gene))
+        self.protein_pse_path = os.path.join(self.perspective_dir_pymol, str(self.gene), "00_{}.pse".format(self.gene))
     #   save it in the gene subfolder and then reinitialize
         cmd.save(self.protein_pse_path)
 
@@ -721,83 +794,71 @@ class MoleculeOperations():
         cmd.orient()
         self.view = cmd.get_view()
 
-    def get_relevant_saav_table(self, gene=None, group=None):
+
+    def get_sample_groups(self):
+        """
+        This creates a self.sample_groups DataFrame that specifies
+
+            1) The samples to include
+            2) Any clusterings of the samples. 
+
+        Clusterings are used to create composite gifs. sample_groups.txt should
+        take the following format:
+
+            sample_id    region    main_groups    proteotypes
+            ANE_004_05M    ANE    Gr01    Gr01_C
+            ANE_150_05M    ANE    Gr01    Gr01_C
+            ANE_151_05M    ANE    Gr01    Gr01_C
+            ANE_152_05M    ANE    Gr01    Gr01_C
+            ANW_141_05M    ANW    Gr02    Gr02_A
+            ANW_142_05M    ANW    Gr02    Gr02_C
+
+        (Afterwards, a method from VariantsTable is envoked to merge the info from self.sample_groups to the
+        SAAV table.) Groupings are not required but samples are. If no sample_groups.txt is provided, no 
+        groupings are assumed and all the present in the SAAV table are used (after displayinga  warning)
+        """
+
+    #   if no file provided, accept all sample_ids in SAAV table
+        if not self.sample_groups_fname:
+            print("\nWARNING: no sample-groups file provided. No groupings will be made and "
+                  "samples will be assumed to be those present in the SAAV table\n")
+            time.sleep(5)
+            self.sample_groups = self.table.saav_table["sample_id"].unique().to_frame()
+
+    #   if file doesn't exist, inform user
+        if not os.path.isfile(self.sample_groups_fname):
+            raise ValueError("{} is not a file you moronic piece of scum.".format(self.sample_groups_fname))
+
+    #   otherwise, import sample-groups as a pandas DataFrame
+        else:
+            self.sample_groups = pd.read_csv(self.sample_groups_fname, sep='\t', header=0, index_col=False)
+
+
+    def get_relevant_saav_table(self, gene=None, member=None):
         
         saav_table_subset = self.table.saav_table
+
         if gene:
             saav_table_subset = saav_table_subset[saav_table_subset["corresponding_gene_call"]==gene]
-        if group:
-            saav_table_subset = saav_table_subset[self.table.saav_table[self.pymol_config.get(self.section, "group_by")]==group]
+        if member:
+            saav_table_subset = saav_table_subset[saav_table_subset[self.grouping]==member]
         return saav_table_subset
 
 
-    def get_group_list(self):
+    def get_uniques_in_group(self, group_name):
         """
-        Returns a list of the unique elements in the SAAV table column specified
-        by the "group_by" attribute in self.pymol_config_fname.
+        Returns a list of the unique elements for the column in
+        self.sample_groups specified by group_name.  
         """
-        return list(self.table.saav_table[self.pymol_config.get(self.section, "group_by")].unique())
+        return list(self.sample_groups[group_name].unique())
 
 
-    def load_and_validate_pymol_config_file(self):
-        """
-        The format of this file should be standard INI format. an example would be
-
-            [<unique_name_1>]
-            # a descriptive name for <unique_name_1> should be chosen, but could be simple, like "1"
-            color_variable     = <a column name from SAAV table, default = False>
-            radii           = <a column name from SAAV table, default = 2>
-            alpha     = <a column name from SAAV table, default = 1>
-            sidechain        = <True, default = False>
-            group_by         = <a column name from SAAV table>
-            color_hierarchy  = <global, gene, group>
-
-            [unique_name_2]
-            #group_by is the only required argument
-            group_by = <only requirement
-
-            [DEFAULT]
-            # if any settings are missing from the above sections, they are given the
-            # default values defined here
-
-        """
-
-        if not os.path.isfile(self.pymol_config_fname):
-            raise("{} isn't even a file".format(self.pymol_config_name))
-
-    #   this is a list of all possible attributes
-        attributes_list   = ["color_variable","radii","alpha","sidechain","color_hierarchy","group_by"]
-
-    #   load file
-        self.pymol_config = ConfigParser.ConfigParser()
-        self.pymol_config.read(self.pymol_config_fname)
-
-        """ IMPORTANT: The indexing syntax for configparser is fundamentally
-        different between python2 and python3. Once we start running pymol
-        through python 3, this syntax will have to be imported over. """
-
-
-        """ IMPORTANT: color_variable either takes a string OR the boolean "False". Currently I just
-        test whether the string = "False". Ideally I will convert to a boolean if the user input
-        is the string "False" """
-
-        for section in self.pymol_config.sections():
-
-        #   don't allow whitespace in section names
-            if " " in section:
-                raise ValueError("Please no whitespace in section names.")
-
-            for name, value in self.pymol_config.items(section):
-            #   demand all user attributes are in attributes_list
-                if name not in attributes_list:
-                    raise ValueError("{} in {} is not a valid attribute.".format(name, section))
-
-
-    def get_protein_pdb(self, gene):
+    def get_protein_pdb(self):
         """
         Returns the pdb file for a given gene.
         """ 
-        protein_pdbs = glob.glob(os.path.join(self.input_dir, "{}.all_in_one".format(gene), "*.pdb"))
+        protein_pdbs = glob.glob(os.path.join(self.input_dir, "{}.all_in_one".format(self.gene), "*.pdb"))
+
         if len(protein_pdbs) != 1:
             raise ValueError("Expecting 1 pdb file but found {}".format(len(protein_pdbs)))
         protein_pdb = protein_pdbs[0]
@@ -854,19 +915,19 @@ class MoleculeOperations():
 
 class Color():
     
-    def __init__(self, saav_table, pymol_config, section):
+    def __init__(self, saav_table, pymol_config, perspective):
 
     #   make input parameters class attributes
         self.saav_table = saav_table
-        self.pymol_config = pymol_config
-        self.section = section
+        self.config.config_dict = pymol_config
+        self.perspective = perspective
 
     #   load HTML color codes and names
     #   (from https://github.com/codebrainz/color-names/blob/master/output/colors.csv)
         self.load_color_db()
 
     #   get color_variable from pymol_config
-        self.color_variable = pymol_config.get(section,"color_variable")
+        self.color_variable = pymol_config.get(perspective,"color_variable")
 
     #   determine datatype of template_data (is it a string or a number?)
         self.colorvariabletype = self.find_colorvariabletype()
@@ -1115,10 +1176,27 @@ class Config:
         radii_range   = <"x, y", where x is the the lower radius value and y is the upper, default = 0.65, 2.6
         alpha_range   = <"x, y", where x is the the lower radius value and y is the upper, default = 0.00, 0.85
         sidechain     = <whether or not sidechains of the variants are visible>
-        color_hierarchy  = <global, gene, group>
 
-        [<perspective1>]
+        merged_color_var     = <a column name from SAAV table>
+        merged_radii_var     = <a column name from SAAV table>
+        merged_alpha_var     = <a column name from SAAV table>
+        merged_color_scheme  = <a recognized keyword for color mappings, a default exists for each accepted color_var variable>
+        merged_radii_range   = <"x, y", where x is the the lower radius value and y is the upper, default = 0.65, 2.6
+        merged_alpha_range   = <"x, y", where x is the the lower radius value and y is the upper, default = 0.00, 0.85
+
+        [<perspective2>]
         ...
+
+    What's probably confusing and what's probably even more annoying to explain
+    is the merged variables.  All of the non-merged variables define the images
+    produced for each sample. But the samples can be grouped according to the
+    sample_groups.txt file, and a composite/merged image of each of these
+    groupings is also made.  Since many of the SAAVs in the merged image will
+    overlap, it's convenient to visualize the degree of overlap with either the
+    radii, alpha, or I guess color of the spheres. For this reason, you can
+    also define all of the parameters for the merged image. If they are not
+    specified, all of the non-merged settings will be copied to the merged
+    settings. Okay, that wasn't so bad.
     """
     
     """ IMPORTANT: The indexing syntax for configparser is fundamentally
@@ -1131,110 +1209,135 @@ class Config:
         self.config_fname = config_fname
 
     #   load the config file
-        self.config = self.load_config_file(config)
+        self.config = self.load_config_file()
 
     #   instantiate default values
+        self.defaults = self.get_default_dictionary()
 
     #   all possible options for a given perspective are given here
         self.options_list   = ["color_var",
-                               "radii_var",
-                               "alpha_var",
                                "color_scheme",
-                               "radii_scheme",
-                               "alpha_scheme",
-                               "color_hierarchy",
+                               "color_static",
+                               "radii_var",
+                               "radii_range",
+                               "radii_static",
+                               "alpha_var",
+                               "alpha_range",
+                               "alpha_static",
+                               "merged_color_var",
+                               "merged_color_scheme",
+                               "merged_color_static",
+                               "merged_radii_var",
+                               "merged_radii_range",
+                               "merged_radii_static",
+                               "merged_alpha_var",
+                               "merged_alpha_range",
+                               "merged_alpha_static",
                                "sidechain"]
 
-    #   sanity check
-    #   which options are present, which are not
+    #   try and raise an error
+        self.attack_config_structure()
 
-        for section in self.config.sections():
+        self.convert_configparser_to_dictionary()
 
-        #   don't allow whitespace in section names
-            if " " in section:
-                raise ValueError("Please no whitespace in section names.")
-
-            for name, value in self.config.items(section):
-            #   demand all user options are in options_list
-                if name not in self.options_list:
-                    raise ValueError("{} in {} is not a valid attribute.".format(name, section))
+        #self.print_config_dict()
 
 
-    def attack_then_fix_config_structure(self):
+    def attack_config_structure(self):
         """
         ...make them believe, that offensive operations, often times, is the
            surest, if not the only (in some cases) means of defence - George Washington, 1799
         """
 
-    #   check each section name is unique
+    #   check each perspective name is unique
         if len(self.config.sections()) != len(set(self.config.sections())):
             raise ValueError(("At least one of your perspectives has a name occuring more than once. Well, if we're "
                               "getting technical, at least two of your perspectives have a name occuring more than once."))
 
     #   check the integrity of each perspective
-        for section in self.config.sections():
-            
-        #   list of all options in the section
-            options_in_section = self.config.options(section)
+        for perspective in self.config.sections():
 
         #   don't allow whitespace in perspective names because why the fuck would you put whitespace in your perspective names?
-            if section.strip() is not section:
-                raise ValueError("Why would you put whitespace in your section name? That's not rhetorical. Why? Seriously?")
+            if perspective.replace(" ","") is not perspective:
+                raise ValueError("Why would you put whitespace in your perspective name? That's not rhetorical. Why? Seriously?")
 
         #   disallow a pymol_variable (color, alpha, radii) as being both variable and static
-            if ("color_var" in options_in_section and "color_static" in options_in_section) or \
-               ("radii_var" in options_in_section and "radii_static" in options_in_section) or \
-               ("alpha_var" in options_in_section and "alpha_static" in options_in_section):
-                raise ValueError(("You cannot specify color, radii, or alpha as being both variable and static, "
-                                     "(e.g. you can't have both the options color_var and color_static), but you've "
-                                     "done so in perspective {}.".format(section)))
+            for x in [("color_var", "color_static"),
+                      ("radii_var", "radii_static"),
+                      ("alpha_var", "alpha_static"),
+                      ("merged_color_var", "merged_color_static"),
+                      ("merged_radii_var", "merged_radii_static"),
+                      ("merged_alpha_var", "merged_alpha_static")]:
+                if x[0] in self.config.options(perspective) and x[1] in self.config.options(perspective):
+                    raise ValueError(("You cannot specify color, radii, or alpha as being both variable and static. "
+                                      "You've specified both {} and {} in perspective {}".format(x[0], x[1], perspective)))
 
         #   you can't specify a scheme or range if no variable option (..._var) is specified
-            if ("color_scheme" in options_in_section and "color_var" not in options_in_section) or \
-               ("radii_range"  in options_in_section and "radii_var" not in options_in_section) or \
-               ("alpha_range"  in options_in_section and "alpha_var" not in options_in_section):
-                raise ValueError(("You can't specify a scheme or range (e.g color_scheme) without also specifying "
-                                  "the corresponding variable (color_var), but you've done so in perspective {}".format(section)))
+            for x in [("color_scheme", "color_var"),
+                      ("radii_range",  "radii_var"),
+                      ("alpha_range",  "alpha_var"),
+                      ("merged_color_scheme", "merged_color_var"),
+                      ("merged_radii_range",  "merged_radii_var"),
+                      ("merged_alpha_range",  "merged_alpha_var")]:
+                if (x[0] in self.config.options(perspective) and x[1] not in self.config.options(perspective)):
+                    raise ValueError("You can't specify {} without also specifying {}. (You did so in perspective {})".\
+                                      format(x[0], x[1], perspective))
 
 
-            """The composition of options in section is sound. Now adding defaults where they are needed"""
+            """The composition of options in perspective is sound. Now adding defaults where they are needed"""
 
 
-        #   if neither _var or _static options were not provided for any of color, alpha, and radii, static default is set
-            if ("color_var" not in options_in_section and "color_static" not in options_in_section):
-                self.config.set(section, "color_static", self.option_defaults["color_static"])
-
-            if ("radii_var" not in options_in_section and "radii_static" not in options_in_section):
-                self.config.set(section, "radii_static", self.option_defaults["radii_static"])
-
-            if ("alpha_var" not in options_in_section and "alpha_static" not in options_in_section):
-                self.config.set(section, "color_static", self.option_defaults["color_static"])
+        #   if neither _var nor _static options were not provided for any of color, alpha, and radii, static default is set
+            for x in [("color_var","color_static"),
+                      ("radii_var","radii_static"),
+                      ("alpha_var","alpha_static")]:
+                if (x[0] not in self.config.options(perspective) and x[1] not in self.config.options(perspective)):
+                    self.config.set(perspective, x[1], self.defaults[x[1]])
 
         #   if color_scheme, radii_range, and alpha_range are not provided (but corresponding _vars are, defaults are set)
-            if ("color_var" in options_in_section and "color_scheme" not in options_in_section):
-                self.config.set(section, "color_static", self.option_defaults["color_scheme"])
+            for x in [("color_var","color_scheme"),
+                      ("radii_var","radii_range"),
+                      ("alpha_var","alpha_range")]:
+                if (x[0] in self.config.options(perspective) and x[1] not in self.config.options(perspective)):
+                    self.config.set(perspective, x[1], self.defaults[x[1]])
 
-            if ("radii_var" in options_in_section and "radii_range" not in options_in_section):
-                self.config.set(section, "radii_static", self.option_defaults["radii_range"])
+        #   Now for the merged variables. If no merged variables were provided, we copy from the nonmerged variables.
+            if len([x for x in self.config.options(perspective) if "merged" in x]) == 0:
+                for nonmerged in ["color_var", "radii_var", "alpha_var", "color_static", "radii_static", "alpha_static", "color_scheme", "radii_range", "alpha_range"]:
+                    if nonmerged in self.config.options(perspective):
+                        self.config.set(perspective, "merged_"+nonmerged, self.config.get(perspective, nonmerged))
 
-            if ("alpha_var" in options_in_section and "alpha_range" not in options_in_section):
-                self.config.set(section, "color_static", self.option_defaults["color_range"])
+        #   Otherwise, we add defaults the same as for non-merged
+            else:
+                
+            #   if neither _var or _static options were not provided for any of color, alpha, and radii, static default is set
+                for x in [("merged_color_var","merged_color_static"),
+                          ("merged_radii_var","merged_radii_static"),
+                          ("merged_alpha_var","merged_alpha_static")]:
+                    if (x[0] not in self.config.options(perspective) and x[1] not in self.config.options(perspective)):
+                        self.config.set(perspective, x[1], self.defaults[x[1]])
+            #   if color_scheme, radii_range, and alpha_range are not provided (but corresponding _vars are, defaults are set)
+                for x in [("merged_color_var","merged_color_scheme"),
+                          ("merged_radii_var","merged_radii_range"),
+                          ("merged_alpha_var","merged_alpha_range")]:
+                    if (x[0] in self.config.options(perspective) and x[1] not in self.config.options(perspective)):
+                        self.config.set(perspective, x[1], self.defaults[x[1]])
 
-        #   All other non-dependent variables (sidechain, protein color, yada, yada, yada)
-            if "sidechain" not in options_in_section:
-                self.config.set(section, "sidechain", self.option_defaults["sidechain"])
+        #   Finally, we add defaults for variables that are independent of other variables (sidechain, protein color, yada, yada, yada) 
+            if "sidechain" not in self.config.options(perspective):
+                self.config.set(perspective, "sidechain", self.defaults["sidechain"])
 
 
             """All defaults have been added. Now going through the value for each option to make sure its valid"""
 
 
-            for option, value in self.config.items(section):
+            for option, value in self.config.items(perspective):
                 
             #   raise hell if user provided options outside of self.options
                 if option not in self.options_list:
-                    raise ValueError("{} in {} isn't a valid option.".format(option, section))
+                    raise ValueError("{} in {} isn't a valid option.".format(option, perspective))
 
-            ############## INCOMPLETE #################
+            ############## INCOMPLETE. FOR NOW WE TRUST THE USERS OPTION VALUES ARE VALID ##############
 
 
     def get_default_dictionary(self):
@@ -1247,24 +1350,88 @@ class Config:
         color_static, it is defined only if color_static and color_var are both
         not specified.
         """
-        defaults = {"color_static" : "#842f68",
-                    "radii_static" : "2",
-                    "alpha_static" : "0.85",
-                    "sidechain"    : "no",
-                    "color_scheme" : "darkred_to_darkblue",
-                    "radii_range"  : "0.65, 2.60",
-                    "alpha_range"  : "0.10, 0.90"}
+
+        defaults = {"color_static"        : "#842f68",
+                    "merged_color_static" : "#842f68",
+                    "radii_static"        : "2",
+                    "merged_radii_static" : "2",
+                    "alpha_static"        : "0.85",
+                    "merged_alpha_static" : "0.85",
+                    "color_scheme"        : "darkred_to_darkblue",
+                    "merged_color_scheme" : "darkred_to_darkblue",
+                    "radii_range"         : "0.65, 2.60",
+                    "merged_radii_range"  : "0.65, 2.60",
+                    "alpha_range"         : "0.10, 0.90",
+                    "merged_alpha_range"  : "0.10, 0.90",
+                    "sidechain"           : "no"}
         return defaults
 
 
     def load_config_file(self):
 
     #   check that it exists
-        if not os.path.isfile(self.pymol_config_fname):
-            raise("{} isn't even a file".format(self.pymol_config_name))
+        if not os.path.isfile(self.config_fname):
+            raise("{} isn't even a file".format(self.config_name))
 
     #   load as ConfigParser object
         config = ConfigParser.ConfigParser()
         config.read(self.config_fname)
 
         return config
+
+
+    def convert_configparser_to_dictionary(self):
+        """
+        Makes a dictionary out of the ConfigParser object. The reason for
+        converting to dictionary is so that we can convert all of the option
+        values to the correct data type, e.g. float, boolean, etc. This isn't
+        supported by ConfigParser.
+        """
+
+        def str_to_bool(x):
+            return x.lower() in ("yes", "true", "t", "1")
+
+        def str_to_tuple(x):
+            return tuple([float(y) for y in x.replace(" ", "").\
+                                              replace("(", "").\
+                                              replace(")", "").split(",")])
+
+        type_convert = {"color_var"           : str,
+                        "merged_color_var"    : str,
+                        "color_static"        : str,
+                        "merged_color_static" : str,
+                        "color_scheme"        : str,
+                        "merged_color_scheme" : str,
+                        "radii_var"           : str,
+                        "merged_radii_var"    : str,
+                        "radii_static"        : float,
+                        "merged_radii_static" : float,
+                        "radii_range"         : str_to_tuple,
+                        "merged_radii_range"  : str_to_tuple,
+                        "alpha_var"           : str,
+                        "merged_alpha_var"    : str,
+                        "alpha_static"        : float,
+                        "merged_alpha_static" : float,
+                        "alpha_range"         : str_to_tuple,
+                        "merged_alpha_range"  : str_to_tuple,
+                        "sidechain"           : str_to_bool}
+
+        self.config_dict = {}
+        for perspective in self.config.sections():
+            self.config_dict[perspective] = {}
+            for option in self.config.options(perspective):
+                self.config_dict[perspective][option] = type_convert[option](self.config.get(perspective, option))
+
+
+    def print_config_dict(self):
+        """
+        Just some print function
+        """
+        for key in self.config_dict.keys():
+            print("\n\n")
+            print("{}".format(key))
+            for keys, value in self.config_dict[key].items():
+                print(keys, value)
+            print("\n\n")
+
+
