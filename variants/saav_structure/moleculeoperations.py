@@ -409,7 +409,7 @@ class MoleculeOperations():
         self.get_sample_groups()
 
     #   defines dictionary for how .gif's and .png's are named, based on groupings
-        self.get_sample
+        self.get_name_save_dictionary()
 
     #   merge sample_groups.txt information into the saav_table
         self.table.merge_DataFrame(self.sample_groups)
@@ -434,6 +434,21 @@ class MoleculeOperations():
     #   loop_through_perspectives calls loop_through_genes which calls loop_through_groupings
         self.loop_through_perspectives()
 
+    def get_name_save_dictionary(self):
+        """
+        This dictionary defines what is prepended to .pse and .png files and is
+        grouping-specific. For example, all groupings except sample_id will
+        have "merged" prepended so they are easily parsed and organizable.
+        """
+        
+        self.name_save = {}
+        for grouping in self.sample_groups.columns.values:
+
+            if grouping == "sample_id":
+                self.name_save["sample_id"] = "sample_"
+            else: 
+                self.name_save[grouping] = "merged_{}_".format(grouping)
+                
 
     def loop_through_perspectives(self):
         """
@@ -467,7 +482,7 @@ class MoleculeOperations():
         #   AASTs per gene. To avoid colorObject being reinstantiated
         #   inappropriately, self.get_colormap is always called conditioned by
         #   color_hierarchy being either global, gene, or group
-            self.color_hierarchy = self.config.config_dict.get(perspective, "color_hierarchy")
+            self.color_hierarchy = self.config.config_dict[self.perspective]["color_hierarchy"]
             if self.color_hierarchy == "global":
                 saav_table_subset = self.get_relevant_saav_table()
                 self.colorObject = Color(saav_table_subset, self.config.config_dict, self.perspective)
@@ -547,32 +562,25 @@ class MoleculeOperations():
                 saav_table_subset = self.get_relevant_saav_table(gene=self.gene, member=self.member)
 
             #   make the saav .pse
-                self.do_all_saav_pse_things(saav_table_subset, group)
+                self.do_all_saav_pse_things(saav_table_subset)
 
             #   make an image for the group
-                self.do_all_image_things(group)
+                self.do_all_image_things()
 
             #   delete SAAVs from this group before starting next one
-                cmd.delete(group)
+                cmd.delete(self.member)
 
 
-    def do_all_image_things(self, group):
+    def do_all_image_things(self):
         """
         """
-    #   make directory for the group 
-        group_dir = os.path.join(self.gene_dir_images, group)
-        self.mkdirp(group_dir)
-    #   I don't do this anymore, buth I could
-        #pse_list = [self.protein_pse_path, self.saav_pse_path]
-        #self.join_pses(pse_list)
-
     #   I could have sophisticated routines here for taking multiple images,
     #   collages, any view setting like orientation, etc. this really deserves
     #   its own class. Instead I'll just call this 1-liner that saves the image
-        self.create_image_file(group, group_dir) 
+        self.create_image_file() 
         
 
-    def create_image_file(self, group, group_dir):
+    def create_image_file(self):
         """
         saves a single png image
         """
@@ -581,12 +589,8 @@ class MoleculeOperations():
         #   very costly!
             cmd.ray(self.res)
 
-        save_path = os.path.join(group_dir,"{}.png".format(group))
+        save_path = os.path.join(self.gene_dir_images, "{}{}.pse".format(self.name_save[self.grouping],self.member))
         cmd.png(save_path)
-
-    #   only if color_hierarchy == group do you make a legend (otherwise its higher in directory)
-        if self.color_hierarchy == "group":
-            self.colorObject.export_legend(os.path.join(self.gene_dir_images,group),"{}_legend.txt".format(group))
 
 
     def join_pses(self, pse_list):
@@ -606,7 +610,7 @@ class MoleculeOperations():
             cmd.load(pse,partial=1)
 
 
-    def do_all_saav_pse_things(self, saav_table_subset, group):
+    def do_all_saav_pse_things(self, saav_table_subset):
         """
         This function creates creates a saav .pse file for each group, and then
         saves the file.
@@ -614,13 +618,15 @@ class MoleculeOperations():
     #   holds all the info for each SAAV like color, radii, & alpha
         self.saav_properties = self.fill_saav_properties_table(saav_table_subset)
 
-    #   create save directory for the saav pse
-        self.saav_pse_path = os.path.join(self.perspective_dir_pymol, str(self.gene), "{}.pse".format(group))
+    #   create save directory for the saav pse, e.g. "path/to/PyMOL/1248/sample_ANE_132_05M.pse"
+        self.saav_pse_path = os.path.join(self.perspective_dir_pymol, str(self.gene), 
+                                          "{}{}.pse".format(self.name_save[self.grouping], self.member))
 
     #   create the file
-        self.create_saav_pse_file(group)
+        self.create_saav_pse_file()
 
-    def create_saav_pse_file(self, gene, group):
+
+    def create_saav_pse_file(self):
     
     #   set any settings specific to the SAAV .pse files here. Once a SAAV .pse
     #   is merged with its corresponding protein .pse, the settings of the
@@ -630,40 +636,41 @@ class MoleculeOperations():
 
     #   if there are no SAAVs,just save an empty file
         if len(self.saav_properties.index) == 0:
-            cmd.save(os.path.join(self.perspective_dir_pymol, str(self.gene), "{}.pse".format(group)), group)
+            cmd.save(self.saav_pse_path, self.member)
 
     #   otherwise do the stuff we were planning to
         else:
 
         #   define the selection of the SAAVs, create their object, then delete selection
             sites = "+".join([str(resi) for resi in self.saav_properties.index])
-            cmd.select(group+"_sel","resi {}".format(sites))
-            cmd.create(group,group+"_sel")
-            cmd.delete("Gr02_C_sel")
+            cmd.select(self.member+"_sel","resi {}".format(sites))
+            cmd.create(self.member, self.member+"_sel")
+            cmd.delete(self.member+"_sel")
 
             pymol.saav_properties = self.saav_properties
         #   change the color for each saav according to the saav_colors dict
-            cmd.alter(group,"color = pymol.saav_properties.loc[int(resi),'color_indices']")
+            cmd.alter(self.member,"color = pymol.saav_properties.loc[int(resi),'color_indices']")
 
             """ IMPORTANT: Pymol does not let you perform alter on both sphere_transparency
             and sphere_scale without a massive memory leak. So here we just look at one 
             at a time. By the way this is horrible but whatever. """
-            if self.config.config_dict.get(self.perspective, "radii") == "radii" and self.config.config_dict.get(self.perspective, "alpha") == "alpha":
+            if self.config.config_dict[self.perspective]["radii"] == "radii" and self.config.config_dict[self.perspective]["alpha"] == "alpha":
                 cmd.set("sphere_scale", 2.0)
                 cmd.set("sphere_transparency", 0.0)
-            elif self.config.config_dict.get(self.perspective, "radii") == "radii":
+            elif self.config.config_dict[self.perspective]["radii"] == "radii":
                 cmd.set("sphere_scale", 2.0)
-                cmd.alter(group,"s.sphere_transparency = pymol.saav_properties.loc[int(resi),'alpha']")
+                cmd.alter(self.member,"s.sphere_transparency = pymol.saav_properties.loc[int(resi),'alpha']")
             else:
                 cmd.set("sphere_transparency", 0.15)
-                cmd.alter(group,"s.sphere_scale = pymol.saav_properties.loc[int(resi),'radii']")
+                cmd.alter(self.member,"s.sphere_scale = pymol.saav_properties.loc[int(resi),'radii']")
             cmd.rebuild()
 
         #   displays the spheres
-            cmd.show("spheres","{} and name ca".format(group))
+            cmd.show("spheres","{} and name ca".format(self.member))
 
         #   save the file
-            cmd.save(self.saav_pse_path, group)
+            cmd.save(self.saav_pse_path, self.member)
+
 
     def fill_saav_properties_table(self, saav_table_subset):
         """
@@ -690,24 +697,30 @@ class MoleculeOperations():
         for AspGlu.
         """
 
-        """ IMPORTANT: Currently, this only works when a color column is
-        specified. Will need to be refactored to include single pymol colors.
-        One way around it would be appending a new column to the saav_table
-        when column_color is "False" and calling that the new column_color.
-        This would actually work quite well for alpha and radii as well"""
-
     #   I add +1 to account for the zero-indexing anvio does
         saav_table_subset["resi"] = saav_table_subset["codon_order_in_gene"]+1
 
-    #   rebrand the column names for style points
+    #   There are two cases: either self.grouping == "sample_id", or, it doesn't.
+    #   When it doesn't, coloring is done according to the merged variables in
+    #   self.config.config_dict. When it does, we color according to the non-merged
+    #   variables (i.e. the variables for samples). Kapeesh?
+        '''
+        1. get a list specifying all variable elements I care about. For example,
+           merged_radii_var
+        2. 
+
+
+        '''
+    #   get a list specifying all the variable elements I care about ()
+
         color_variable = self.colorObject.color_variable
-        alpha_column = self.config.config_dict.get(self.perspective,"alpha")
-        radii_column = self.config.config_dict.get(self.perspective,"radii") 
+        alpha_variable = self.config.config_dict[self.perspective]["alpha_var"]
+        radii_variable = self.config.config_dict[self.perspective]["radii_var"] 
 
     #   determine/define whether columns are string-type or number-type
-        string_or_number = {color_variable : self.colorObject.colorvariabletype,
-                            alpha_column : "numeric",
-                            radii_column : "numeric"}
+        string_or_number = {color_variable : self.colorObject.color_variable_type,
+                            alpha_variable : "numeric",
+                            radii_variable : "numeric"}
 
     #   if number-type, take the mean. if string-type, take most frequent string
         def resolve_ambiguity(dtype):
@@ -717,8 +730,12 @@ class MoleculeOperations():
                 return lambda x: x.value_counts().idxmax()
 
         methods_dictionary  = {}
-        for column, dtype in string_or_number.items():
-            methods_dictionary[column] = resolve_ambiguity(dtype)
+        #for column, dtype in string_or_number.items():
+        #    methods_dictionary[column] = resolve_ambiguity(dtype)
+
+        for variable in variables:
+            methods_dictionary[variable] = resolve_ambiguity(string_or_number[dtype])
+
 
     #   this single line illustrates why pandas is so fucking good
         saav_data = saav_table_subset.groupby("resi").agg(methods_dictionary)
@@ -732,7 +749,6 @@ class MoleculeOperations():
         be `1452`, the color index corresponding to `AspGlu`. This new data is
         the table spelled out in the above docstring and is called
         `saav_properties`. """
-
 
     #   Now I have to translate the data in saav_data to data understood by PyMOL
         saav_properties = pd.DataFrame({}, index=saav_data.index)
@@ -748,7 +764,7 @@ class MoleculeOperations():
         if (saav_data[alpha_column].max() or saav_data[radii_column].max()) > 1:
             print("alpha: {}".format(saav_data[alpha_column].max()))
             print("radii: {}".format(saav_data[radii_column].max()))
-            raise ValueError("Expecting columns to be less than 0")
+            raise ValueError("Expecting columns to be less than 1")
 
     #   add alpha column (my def of alpha is: 0 means opaque, 1 means translucent)
         saav_properties["alpha"] = 1 - saav_data[alpha_column]
@@ -832,6 +848,16 @@ class MoleculeOperations():
     #   otherwise, import sample-groups as a pandas DataFrame
         else:
             self.sample_groups = pd.read_csv(self.sample_groups_fname, sep='\t', header=0, index_col=False)
+
+    #   all samples in sample_groups must also be present in the SAAV table
+        in_table = list(self.table.saav_table["sample_id"].unique())
+        in_samples = list(self.sample_groups["sample_id"].unique())
+        in_both = [x for x in in_samples if x in in_table]
+        if set(in_both) != set(in_samples):
+            raise ValueError("You have samples present in your sample-groups that are not "
+                             "in your SAAV table. You can't just do that. The following are in "
+                             "sample-groups but not in saav_table".format\
+                             ([x for x in in_samples if x not in in_both]))
 
 
     def get_relevant_saav_table(self, gene=None, member=None):
@@ -919,26 +945,32 @@ class Color():
 
     #   make input parameters class attributes
         self.saav_table = saav_table
-        self.config.config_dict = pymol_config
+        self.config_dict = pymol_config
         self.perspective = perspective
 
     #   load HTML color codes and names
     #   (from https://github.com/codebrainz/color-names/blob/master/output/colors.csv)
         self.load_color_db()
 
-    #   get color_variable from pymol_config
-        self.color_variable = pymol_config.get(perspective,"color_variable")
+    #   This runs when the color is asked to vary
+        if "color_var" in self.config_dict[perspective]:
+        #   get color_variable from config_dict
+            self.color_variable = self.config_dict[perspective]["color_var"]
+        #   determine datatype of template_data (is it a string or a number?)
+            self.color_variable_type = self.find_color_variable_type()
+        #   create template data: an array of the unique entries
+        #   if numeric, template_data is just the minimum and maximum value
+        #   if string-like, it is all unique entries
+            self.template_data = self.get_template_data()
+        else:
+            self.color_variable = None
+            self.color_variable_type = None
 
-    #   determine datatype of template_data (is it a string or a number?)
-        self.colorvariabletype = self.find_colorvariabletype()
-    #   create template data: an array of the unique entries
-    #   if numeric, template_data is just the minimum and maximum value
-    #   if string-like, it is all unique entries
-        self.template_data = self.get_template_data()
-
-        print(self.color_variable)
-        print(self.colorvariabletype)
-        print(self.template_data)
+    #   if color_static was provided instead of color_var, the color is constant for the perspective
+        if "color_static" in self.config_dict[perspective]:
+            self.color_static = self.config_dict[perspective]["color_static"]
+        else:
+            self.color_static = None
 
     #   construct the colormap differently, depending the datatype of the column
         self.create_colors()
@@ -948,11 +980,15 @@ class Color():
         Accesses the color code of x. x is "AspGlu", 2043.20, etc. 
         """
 
-        if self.colorvariabletype == "strings":
+        if self.color_variable_type == "strings":
             return list(self.color_dict[x].rgb)
 
-        if self.colorvariabletype == "numeric":
+        if self.color_variable_type == "numeric":
             return list(self.numeric_map(x).rgb)
+
+        if self.color_static:
+            return list(colour(self.color_static).rgb)
+
 
     def load_color_db(self):
         """
@@ -982,19 +1018,22 @@ class Color():
         0-100, the dictionary would look like {0:color1, 50:color2, 100:color3}
         """
         
-        if self.colorvariabletype == "numeric":
-            self.base_colors, self.gradations = self.default_color_scheme_repo(self.color_variable)
+        if self.color_variable_type == "numeric":
+            self.base_colors, self.gradations = self.color_scheme_repo(self.color_variable)
             self.color_gradient = self.get_color_gradient()
             self.color_dict = {self.template_data[0] : self.access_color(self.template_data[0]),
                                self.template_data[1] : self.access_color(self.template_data[1])}
 
-        if self.colorvariabletype == "strings":
-            self.color_dict = self.default_color_scheme_repo(self.color_variable)
+        if self.color_variable_type == "strings":
+            self.color_dict = self.color_scheme_repo(self.color_variable)
             for key, value in self.color_dict.items():
                 self.color_dict[key] = colour(value)
 
+        if self.color_static:
+            self.color_dict = {"everything" : colour(self.color_static)}
 
-    def default_color_scheme_repo(self, var):
+
+    def color_scheme_repo(self, var):
         """
         This repo stores default coloring schemes for common variables. These are
         `default` because they can be overwritten by the user. If the variable is
@@ -1055,29 +1094,29 @@ class Color():
         """
 
         n = len(self.base_colors)
-    
+
     #   if int-like self.gradations is passed, transform into array-like
         if type(self.gradations) == int:
             self.gradations = [self.gradations//(n-1) for _ in range(n-1)]
-    
+
     #   if array-like self.gradations is passed, ensure its length is n-1
         if len(self.gradations) != n-1:
                 raise ValueError("The self.gradations array must be n-1")
-    
+
         if any([x==0 for x in self.gradations]):
             raise ValueError("One or more of the gradation intervals you defined sucks.")
-    
+
         color_gradient = []
-    
+
         for i in range(1, n):
-    
+
             fro = colour(self.base_colors[i-1])
             to = colour(self.base_colors[i])
-    
+
             color_gradient_interval = list(fro.range_to(to, self.gradations[i-1]))
             if not i == n - 1: del color_gradient_interval[-1]
             color_gradient.extend(color_gradient_interval)
-    
+
         return color_gradient
 
 
@@ -1098,16 +1137,16 @@ class Color():
         gene and group) and returns the unique values if string-like and
         returns the minimum and maximum of numeric
         """
-        if self.colorvariabletype == "strings":
+        if self.color_variable_type == "strings":
             template_data = np.sort(self.saav_table[self.color_variable].unique())
             return template_data
 
-        if self.colorvariabletype == "numeric":
+        if self.color_variable_type == "numeric":
             template_data = (self.saav_table[self.color_variable].min(),
-                                          self.saav_table[self.color_variable].max())
+                                             self.saav_table[self.color_variable].max())
             return template_data
 
-    def find_colorvariabletype(self):
+    def find_color_variable_type(self):
         """
         Determines the data type of the column (either string or number)
         """
@@ -1119,7 +1158,7 @@ class Color():
         """
         num_saavs = len(saav_data.index)
            
-        """IMPORTANT: PyMOL won't let me define color names that contain any
+        """ IMPORTANT: PyMOL won't let me define color names that contain any
         numbers whatsoever so I have to name the color of each SAAV some 
         unique alphabetic string. This sucks and I'm pissed. """
 
@@ -1218,6 +1257,7 @@ class Config:
         self.options_list   = ["color_var",
                                "color_scheme",
                                "color_static",
+                               "color_hierarchy",
                                "radii_var",
                                "radii_range",
                                "radii_static",
@@ -1240,7 +1280,7 @@ class Config:
 
         self.convert_configparser_to_dictionary()
 
-        #self.print_config_dict()
+        self.print_config_dict()
 
 
     def attack_config_structure(self):
@@ -1353,6 +1393,7 @@ class Config:
 
         defaults = {"color_static"        : "#842f68",
                     "merged_color_static" : "#842f68",
+                    "color_hierarchy"     : "global",
                     "radii_static"        : "2",
                     "merged_radii_static" : "2",
                     "alpha_static"        : "0.85",
@@ -1399,6 +1440,7 @@ class Config:
         type_convert = {"color_var"           : str,
                         "merged_color_var"    : str,
                         "color_static"        : str,
+                        "color_hierarchy"     : str,
                         "merged_color_static" : str,
                         "color_scheme"        : str,
                         "merged_color_scheme" : str,
