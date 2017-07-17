@@ -1,3 +1,6 @@
+import functools
+import shutil
+import pickle as pkl
 import time
 import random
 from colour import Color as colour
@@ -272,19 +275,23 @@ class VariantsTable():
     #   get array of columns that exist in this table
         self.columns = self.get_columns()
 
-    def merge_DataFrame(self, merger):
+    def merge_sample_groups_to_table(self, merger, prevalence):
         """
-        This function simply merges the information from a DataFrame into the 
-        SAAV table. An obvious requirement is that at least one of the column
-        names of the merging DataFrame are found in the SAAV table. This function
-        is just a wrapper for the pd.merge(df1, df2) method in Pandas.
+        This function simply merges the information from a sample-groups
+        DataFrame into the SAAV table. This is accomplished using the
+        pd.merge(df1, df2) method in Pandas. In addition, saav prevalences are
+        calculated for each group (e.g. if a saav position is observed in 2
+        samples in a group with 10 samples, the prevalence for that saav
+        position for that group is 20%.
 
-        INPUTS
-        ------
-        merger : pandas DataFrame
-            a pandas DataFrame with at least one column name that's found in 
-            self.saav_table.
-        
+        INPUTS 
+        ------ 
+        merger : pandas DataFrame 
+            a pandas DataFrame with at least one column name that's found 
+            in self.saav_table.
+        prevalence : Boolean
+            If True, the prevalence scores for each of the groups will be calculated. 
+            This is optional because it is slow
         """
 
     #   make sure at least one column name is shared
@@ -294,6 +301,20 @@ class VariantsTable():
 
     #   merge the columns
         self.saav_table = pd.merge(self.saav_table, merger)
+
+    #   now add a prevalence column for each group
+        
+        if prevalence:
+
+            def append_group_prevalence(x, group):
+                x[group+"_prevalence"] = len(x.index) / x[group+"_size"]
+                return x
+
+            groups = [group for group in merger.columns if "_size" not in group and group != "sample_id"]
+
+            for group in groups:
+                subset = self.saav_table.groupby(["unique_pos_identifier", group])[group+"_size", "entry_id"].apply(functools.partial(append_group_prevalence, group=group))
+                self.saav_table = self.saav_table.merge(subset)
 
 
     def get_columns(self):
@@ -411,25 +432,36 @@ class MoleculeOperations():
     #   defines dictionary for how .gif's and .png's are named, based on groupings
         self.get_name_save_dictionary()
 
-    #   merge sample_groups.txt information into the saav_table
-        self.table.merge_DataFrame(self.sample_groups)
-
     #   load pymol_config file as ConfigParse object and validate its logic
         """ For now, all I do is load the settings. Later I will make sure all
         of the logic works out. """
         self.config = Config(self.config_fname)
-        
+
     #   create columns if they don't exist in saav-table already
-        """ From now, I will assume any columns mentioned in self.config.config_dict
-        already exist in self.table. Later I will have to make a list of
-        columns found in the config file, and tag to each a class and
-        corresponding method responsible for appending them to saav_table. Then
-        I will call each of those classes with a method_list parameter, e.g.
-        AddRaptorXProperty(self.table, methods_list, args). Each Add class should
-        have an attribute called "columns_i_add" """
+        """ From now, I will assume any columns mentioned in
+        self.config.config_dict already exist in self.table (except for
+        prevalence columns, which are currently generated below if "prevalence"
+        is the value of merged_radii_var or merged_alpha_var). Later I will
+        have to make a list of columns found in the config file, and tag to
+        each a class and corresponding method responsible for appending them to
+        saav_table. Then I will call each of those classes with a method_list
+        parameter, e.g.  AddRaptorXProperty(self.table, methods_list, args).
+        Each Add class should have an attribute called "columns_i_add" """
+        add_prevalence = False
+        for section in self.config.config.sections():
+            for option in ["merged_radii_var", "merged_alpha_var"]:
+                if self.config.config.has_option(section, option):
+                    if self.config.config.get(section, option) == "prevalence":
+                        add_prevalence = True
+        self.table.merge_sample_groups_to_table(self.sample_groups, add_prevalence)
 
     #   create the output directory if it doesn't already exist
         self.mkdirp(self.output_dir)
+
+    #   save the config dictionary in self.output_dir as dot file
+        self.config.save_pkl(self.output_dir)
+    #   save the original sample-groups txt file as a dotfile in self.output_dir
+        shutil.copyfile(self.sample_groups_fname, os.path.join(self.output_dir, ".sample_groups.txt"))
 
     #   loop_through_perspectives calls loop_through_genes which calls loop_through_groupings
         self.loop_through_perspectives()
@@ -440,7 +472,7 @@ class MoleculeOperations():
         grouping-specific. For example, all groupings except sample_id will
         have "merged" prepended so they are easily parsed and organizable.
         """
-        
+
         self.name_save = {}
         for grouping in self.sample_groups.columns.values:
 
@@ -448,7 +480,7 @@ class MoleculeOperations():
                 self.name_save["sample_id"] = "sample_"
             else: 
                 self.name_save[grouping] = "merged_{}_".format(grouping)
-                
+
 
     def loop_through_perspectives(self):
         """
@@ -481,16 +513,51 @@ class MoleculeOperations():
         #   you're coloring by competing_aas and there are more than, say, 40
         #   AASTs per gene. To avoid colorObject being reinstantiated
         #   inappropriately, self.get_colormap is always called conditioned by
-        #   color_hierarchy being either global, gene, or group
+        #   color_hierarchy being either global, gene, or group. 
             self.color_hierarchy = self.config.config_dict[self.perspective]["color_hierarchy"]
             if self.color_hierarchy == "global":
                 saav_table_subset = self.get_relevant_saav_table()
                 self.colorObject = Color(saav_table_subset, self.config.config_dict, self.perspective)
-                self.colorObject.export_legend(self.perspective_dir_pymol, "{}_legend.txt".format(perspective))
-                if self.perspective_dir_images:
-                    self.colorObject.export_legend(self.perspective_dir_images, "{}_legend.txt".format(perspective))
+                self.colorObject.export_legend(self.perspective_dir, "{}_color_legend.txt".format(perspective))
+
         #   loop through each gene
             self.loop_through_genes()
+
+
+    def get_min_and_max_for_alpha_and_radii(self, saav_table_subset):
+        """
+        right now--unlike color--alpha and radii don't get their own class
+        or hierarchy parameter so they're defined here. It's cool though.
+        """
+        radii_and_alpha_min_and_max = {}
+
+        group_specific = ["prevalence"]
+
+        if "radii_var" in self.config.config_dict[self.perspective].keys():
+            radii_and_alpha_min_and_max["radii_m"] = self.table.saav_table[self.config.config_dict[self.perspective]["radii_var"]].min()
+            radii_and_alpha_min_and_max["radii_M"] = self.table.saav_table[self.config.config_dict[self.perspective]["radii_var"]].max()
+
+        if "alpha_var" in self.config.config_dict[self.perspective].keys():
+            radii_and_alpha_min_and_max["alpha_m"] = self.table.saav_table[self.config.config_dict[self.perspective]["alpha_var"]].min()
+            radii_and_alpha_min_and_max["alpha_M"] = self.table.saav_table[self.config.config_dict[self.perspective]["alpha_var"]].max()
+
+        if "merged_alpha_var" in self.config.config_dict[self.perspective].keys():
+            if self.config.config_dict[self.perspective]["merged_alpha_var"] in group_specific:
+                radii_and_alpha_min_and_max["merged_alpha_m"] = saav_table_subset[self.grouping+"_"+self.config.config_dict[self.perspective]["merged_alpha_var"]].min()
+                radii_and_alpha_min_and_max["merged_alpha_M"] = saav_table_subset[self.grouping+"_"+self.config.config_dict[self.perspective]["merged_alpha_var"]].max()
+            else:
+                radii_and_alpha_min_and_max["merged_alpha_m"] = self.table.saav_table[self.config.config_dict[self.perspective]["merged_alpha_var"]].min()
+                radii_and_alpha_min_and_max["merged_alpha_M"] = self.table.saav_table[self.config.config_dict[self.perspective]["merged_alpha_var"]].max()
+
+        if "merged_radii_var" in self.config.config_dict[self.perspective].keys():
+            if self.config.config_dict[self.perspective]["merged_radii_var"] in group_specific:
+                radii_and_alpha_min_and_max["merged_radii_m"] = saav_table_subset[self.grouping+"_"+self.config.config_dict[self.perspective]["merged_radii_var"]].min()
+                radii_and_alpha_min_and_max["merged_radii_M"] = saav_table_subset[self.grouping+"_"+self.config.config_dict[self.perspective]["merged_radii_var"]].max()
+            else:
+                radii_and_alpha_min_and_max["merged_radii_m"] = self.table.saav_table[self.config.config_dict[self.perspective]["merged_radii_var"]].min()
+                radii_and_alpha_min_and_max["merged_radii_M"] = self.table.saav_table[self.config.config_dict[self.perspective]["merged_radii_var"]].max()
+
+        return radii_and_alpha_min_and_max
 
 
     def loop_through_genes(self):
@@ -526,9 +593,9 @@ class MoleculeOperations():
             if self.color_hierarchy == "gene":
                 saav_table_subset = self.get_relevant_saav_table(gene=self.gene)
                 self.colorObject = Color(saav_table_subset, self.config.config_dict, self.perspective)
-                self.colorObject.export_legend(self.gene_dir_pymol, "00_{}_legend.txt".format(self.gene))
+                self.colorObject.export_legend(self.gene_dir_pymol, "00_{}_color_legend.txt".format(self.gene))
                 if self.gene_dir_images:
-                    self.colorObject.export_legend(self.gene_dir_images, "00_{}_legend.txt".format(self.gene))
+                    self.colorObject.export_legend(self.gene_dir_images, "00_{}_color_legend.txt".format(self.gene))
 
         #   loop through each grouping
             self.loop_through_groupings()
@@ -543,7 +610,6 @@ class MoleculeOperations():
             members   : a list of all the categories for a grouping. For example, the grouping "cohort"
                         could have the members "cohort1", "cohort2" and "cohort3"
             member    : a single element of members, i.e. "cohort1"
-
         """
         
     #   get groupings from sample_groups and loop through them
@@ -551,7 +617,10 @@ class MoleculeOperations():
         for grouping in self.groupings:
         
             self.grouping = grouping
-            
+
+        #   for knowing whether merged parameters should be used in the config it must be specified whether grouping is "sample_id" or not.
+            self.doing_samples = True if self.grouping == "sample_id" else False
+
         #   get members from the grouping and loop through them
             self.members = self.sample_groups[self.grouping].unique()
             for member in self.members:
@@ -560,6 +629,9 @@ class MoleculeOperations():
 
             #   subset the saav_table to include only group and gene
                 saav_table_subset = self.get_relevant_saav_table(gene=self.gene, member=self.member)
+
+            #   redefine alpha and radii max/min (in case alpha_var or radii_var are member-specific (like for prevalence))
+                self.radii_and_alpha_min_and_max = self.get_min_and_max_for_alpha_and_radii(saav_table_subset)
 
             #   make the saav .pse
                 self.do_all_saav_pse_things(saav_table_subset)
@@ -648,130 +720,151 @@ class MoleculeOperations():
             cmd.delete(self.member+"_sel")
 
             pymol.saav_properties = self.saav_properties
-        #   change the color for each saav according to the saav_colors dict
-            cmd.alter(self.member,"color = pymol.saav_properties.loc[int(resi),'color_indices']")
 
-            """ IMPORTANT: Pymol does not let you perform alter on both sphere_transparency
-            and sphere_scale without a massive memory leak. So here we just look at one 
-            at a time. By the way this is horrible but whatever. """
-            if self.config.config_dict[self.perspective]["radii"] == "radii" and self.config.config_dict[self.perspective]["alpha"] == "alpha":
-                cmd.set("sphere_scale", 2.0)
-                cmd.set("sphere_transparency", 0.0)
-            elif self.config.config_dict[self.perspective]["radii"] == "radii":
-                cmd.set("sphere_scale", 2.0)
-                cmd.alter(self.member,"s.sphere_transparency = pymol.saav_properties.loc[int(resi),'alpha']")
-            else:
-                cmd.set("sphere_transparency", 0.15)
-                cmd.alter(self.member,"s.sphere_scale = pymol.saav_properties.loc[int(resi),'radii']")
+
+            """ IMPORTANT: In the past PyMOL has not let me perform alter on
+            both sphere_transparency and sphere scale without a massive memory
+            leak. For now, it seems like this leak is not making itself
+            apparent so I have all three alter commands present. Might have to
+            fix this. """
+        #   change the color for each saav according to the saav_colors dict
+            cmd.alter(self.member,"color = pymol.saav_properties.loc[int(resi),'color']")
+            cmd.alter(self.member,"s.sphere_transparency = pymol.saav_properties.loc[int(resi),'transparency']")
+            cmd.alter(self.member,"s.sphere_scale = pymol.saav_properties.loc[int(resi),'radii']")
             cmd.rebuild()
 
         #   displays the spheres
             cmd.show("spheres","{} and name ca".format(self.member))
 
         #   save the file
+            start = time.time()
             cmd.save(self.saav_pse_path, self.member)
+            print(time.time() - start)
+
+
+
+    def get_statics_and_variables_for_grouping(self):
+        """
+        There are lots of keys in the config_dict. This function finds the ones
+        that PyMOL cares about for a given grouping. For example, if 
+        self.grouping == "sample_id", it might return
+        ["color_var", "alpha_static", "radii_var"].
+        """
+        
+        config_keys_for_grouping = [x for x in self.config.config_dict[self.perspective].keys() if \
+                                      "_static" in x or "_var" in x]
+        if self.doing_samples:
+            config_keys_for_grouping = [x for x in config_keys_for_grouping if "merged_" not in x]
+        else:
+            config_keys_for_grouping = [x for x in config_keys_for_grouping if "merged_" in x]
+        return config_keys_for_grouping
 
 
     def fill_saav_properties_table(self, saav_table_subset):
-        """
-        This function produces a table of SAAV properties (size, color, radii,
-        maybe more later) that, as an example, looks like this:
-
-        resi   color_indices   alpha          radii
-        148    5342            0.8            2.0
-        244    2042            0.7            2.0
-        248    4222            0.8            8.0
-        ...    ...             ...            ...
-
-        This is the table fed to PyMOL's cmd.alter function in order to change
-        the appearance of the SAAVs in the SAAV .pse file. Getting this table
-        requires some data massaging. For one, if your group is composed of
-        multiple samples, its possible to have multiple SAAVs at a single codon
-        position, and their columns which specify color_indices, alpha,
-        and/or radii could be non-identical. To reconcile this, I take the
-        following approach: columns that have number data are averaged (for
-        example alpha and radii must be from number data), and for
-        columns that have string data, the most frequent entry is the one
-        chosen (e.g. if competing_aas is your color column and you observe
-        AspGlu AspGlu and IleGlue at resi 148, the color_indices are calculated
-        for AspGlu.
-        """
-
-    #   I add +1 to account for the zero-indexing anvio does
-        saav_table_subset["resi"] = saav_table_subset["codon_order_in_gene"]+1
-
-    #   There are two cases: either self.grouping == "sample_id", or, it doesn't.
-    #   When it doesn't, coloring is done according to the merged variables in
-    #   self.config.config_dict. When it does, we color according to the non-merged
-    #   variables (i.e. the variables for samples). Kapeesh?
-        '''
-        1. get a list specifying all variable elements I care about. For example,
-           merged_radii_var
-        2. 
 
 
-        '''
-    #   get a list specifying all the variable elements I care about ()
-
-        color_variable = self.colorObject.color_variable
-        alpha_variable = self.config.config_dict[self.perspective]["alpha_var"]
-        radii_variable = self.config.config_dict[self.perspective]["radii_var"] 
-
-    #   determine/define whether columns are string-type or number-type
-        string_or_number = {color_variable : self.colorObject.color_variable_type,
-                            alpha_variable : "numeric",
-                            radii_variable : "numeric"}
-
-    #   if number-type, take the mean. if string-type, take most frequent string
+    #   if number-type, take the mean. if string-type, take most frequent string (used in the following for loop)
         def resolve_ambiguity(dtype):
             if dtype == "numeric":
                 return np.mean
             if dtype == "strings":
                 return lambda x: x.value_counts().idxmax()
 
-        methods_dictionary  = {}
-        #for column, dtype in string_or_number.items():
-        #    methods_dictionary[column] = resolve_ambiguity(dtype)
+        def calc_alpha(saav_data_alpha):
+            """
+            Takes the maximum and minimum values of your alpha data and normalizes it
+            to within the range defined by alpha_range (or merged_alpha_range).
 
-        for variable in variables:
-            methods_dictionary[variable] = resolve_ambiguity(string_or_number[dtype])
+            alpha = minimum alpha, beta = maximum alpha, m = mimimum of data, 
+            M = maximum of data, a = y-intercept, b = slope
+            """
+
+            t = lambda x: x if self.doing_samples else "merged_"+x
+
+            if t("alpha_static") in self.config_keys_for_grouping:
+                return saav_data_alpha
+            else:
+            #   parameters for normalization
+                alpha = self.config.config_dict[self.perspective][t("alpha_range")][0]
+                beta  = self.config.config_dict[self.perspective][t("alpha_range")][1]
+                m = self.radii_and_alpha_min_and_max[t("alpha_m")]
+                M = self.radii_and_alpha_min_and_max[t("alpha_M")]
+                a = alpha - m * (beta-alpha) / (M-m)
+                b = (beta-alpha) / (M-m)
+            #   return normalized version of data
+                return a + b * saav_data_alpha
 
 
-    #   this single line illustrates why pandas is so fucking good
-        saav_data = saav_table_subset.groupby("resi").agg(methods_dictionary)
+        def calc_radii(saav_data_radii):
+            """
+            Takes the maximum and minimum values of your radii data and normalizes it
+            to within the range defined by radii_range (or merged_radii_range).
 
-        """ The first part of this method created an aggregated form of the
-        data for situations in which the same SAAV position was found multiple
-        times within the group. The aggregated data is defined in `saav_data`.
-        But pymol doesn't know what to do with data such as `AspGlu`, so the
-        second part of this method transforms this data into terms that are
-        directly accessible to PyMOL. For example, in place of `AspGlu` would
-        be `1452`, the color index corresponding to `AspGlu`. This new data is
-        the table spelled out in the above docstring and is called
-        `saav_properties`. """
+            alpha = minimum radii, beta = maximum radii, m = mimimum of data, 
+            M = maximum of data, a = y-intercept, b = slope
+            """
 
-    #   Now I have to translate the data in saav_data to data understood by PyMOL
+            t = lambda x: x if self.doing_samples else "merged_"+x
+
+            if t("radii_static") in self.config_keys_for_grouping:
+                return saav_data_radii
+
+            else:
+            #   parameters for normalization
+                alpha = self.config.config_dict[self.perspective][t("radii_range")][0]
+                beta  = self.config.config_dict[self.perspective][t("radii_range")][1]
+                m = self.radii_and_alpha_min_and_max[t("radii_m")]
+                M = self.radii_and_alpha_min_and_max[t("radii_M")]
+                a = alpha - m * (beta-alpha) / (M-m)
+                b = (beta-alpha) / (M-m)
+            #   return normalized version of data
+                return a + b * saav_data_radii
+
+    #   first things first, add residue column (+1 used to account for the zero-indexing anvio does)
+        saav_table_subset["resi"] = saav_table_subset["codon_order_in_gene"]+1
+
+    #   initialize the two aforementioned DataFrames that use the unique elements of "resi" as their indices
+        saav_data = pd.DataFrame({}, index=saav_table_subset["resi"].unique())
         saav_properties = pd.DataFrame({}, index=saav_data.index)
 
-    #   add color_indices column
-        saav_properties["color_indices"] = self.colorObject.create_color_indices_for_group(saav_data)
-        """ IMPORTANT: I will eventually have alpha and radii classes that do a
-        similar task to that done directly above for color. But for now, I just
-        write specific and non-scalable code. In what follows I assume that the
-        columns for radii and alpha are both values that very between 0 and
-        1"""
+    #   determine for this grouping, the static and variable keys in self.config.config_dict
+        self.config_keys_for_grouping = self.get_statics_and_variables_for_grouping()
 
-        if (saav_data[alpha_column].max() or saav_data[radii_column].max()) > 1:
-            print("alpha: {}".format(saav_data[alpha_column].max()))
-            print("radii: {}".format(saav_data[radii_column].max()))
-            raise ValueError("Expecting columns to be less than 1")
+        methods_for_pymol = {"color" : self.colorObject.create_color_indices_for_group,
+                             "alpha" : calc_alpha,
+                             "radii" : calc_radii}
 
-    #   add alpha column (my def of alpha is: 0 means opaque, 1 means translucent)
-        saav_properties["alpha"] = 1 - saav_data[alpha_column]
-    #   add radii column
-        min_r = 0.65; max_r = 2.2 
-        saav_properties["radii"] = min_r + (max_r-min_r) * saav_data[radii_column]
+    #   loop through all the variable parameters
+        for key in self.config_keys_for_grouping:
 
+        #   pymol_property is either "color", "alpha", or "radii"
+            pymol_property = key.replace("_var","").replace("_static","").replace("merged_","")
+            property_value = self.config.config_dict[self.perspective][key]
+            print("property value"+str(property_value))
+            print(key)
+
+        #   two workflows: one if its variable, and one if its static
+            if "_var" in key:
+
+            #   determine whether variable is a string or number datatype. Only color can be string-type
+                string_or_number = self.colorObject.color_variable_type if "color_var" in key else "numeric"
+
+            #   add column to saav_data
+                saav_data[pymol_property] = \
+                    saav_table_subset.groupby("resi").agg({property_value : resolve_ambiguity(string_or_number)})
+
+            elif "_static" in key:
+
+            #   add column to saav_data
+                saav_data[pymol_property] = property_value
+
+            else:
+                raise ValueError("Dude... You messed up big time.")
+
+            saav_properties[pymol_property] = methods_for_pymol[pymol_property](saav_data[pymol_property])
+
+    #   pymol uses transparency, not alpha, so I add one additional column here
+        saav_properties["transparency"] = 1 - saav_properties["alpha"]
         return saav_properties
 
 
@@ -831,7 +924,8 @@ class MoleculeOperations():
 
         (Afterwards, a method from VariantsTable is envoked to merge the info from self.sample_groups to the
         SAAV table.) Groupings are not required but samples are. If no sample_groups.txt is provided, no 
-        groupings are assumed and all the present in the SAAV table are used (after displayinga  warning)
+        groupings are assumed and all the present in the SAAV table are used (after displayinga  warning). 
+        Additionally, the group sizes are added to sample groups for prevalence calculations.
         """
 
     #   if no file provided, accept all sample_ids in SAAV table
@@ -858,6 +952,15 @@ class MoleculeOperations():
                              "in your SAAV table. You can't just do that. The following are in "
                              "sample-groups but not in saav_table".format\
                              ([x for x in in_samples if x not in in_both]))
+
+    #   add group size information to sample-groups
+        def append_group_size(x, group):
+            x[group+"_size"] = x["sample_id"].nunique()
+            return x
+
+        groups = [group for group in self.sample_groups.columns if group != "sample_id"]
+        for group in groups:
+            self.sample_groups = self.sample_groups.groupby(group).apply(functools.partial(append_group_size, group=group))
 
 
     def get_relevant_saav_table(self, gene=None, member=None):
@@ -1042,32 +1145,32 @@ class Color():
         mapping.
         """
 
-        red_to_blue = (["#a03129","#fcf5f4","#ffffff","#e8edf9", "#264799"],[50,25,25,50])
-        darkred_to_darkblue = (["#7c0b03","#fcf5f4","#ffffff","#e8edf9", "#133382"],[50,25,25,50])
-        white_to_bloodred = (["#bc0000","#fceaea"]),[150]
+        color_schemes_numeric = {
+        "red_to_blue"         : (["#a03129","#fcf5f4","#ffffff","#e8edf9", "#264799"],[50,25,25,50]),
+        "darkred_to_darkblue" : (["#7c0b03","#7c0b03","#fcf5f4","#ffffff","#e8edf9", "#133382"],[34,50,10,10,50]),
+        "white_to_bloodred"   : (["#bc0000","#fceaea"],[150])
+        }
 
-    #   numerical types
-        if var=="BLOSUM90" or var=="BLOSUM90_weighted" or var=="BLOSUM62" or var=="BLOSUM62_weighted":
-            return darkred_to_darkblue
-
-        if var=="kullback_leibler_divergence_normalized" or var=="kullback_leibler_divergence_raw":
-            return white_to_bloodred
-
-    #   string types
-        if var == "ss3":
-            color_dict = {"H":"#984ea3", "E":"#ff7f00", "C":"#1b9e77", "U":"#e8e9ea"}
-            return color_dict
-
-        if var == "solvent_acc":
-            color_dict = {"B":"#ff00f2", "M":"#17becf", "E":"#004de8", "U":"#e8e9ea"}
-            return color_dict
+        color_schemes_string = {
+        "ss3"           : {"H":"#984ea3", "E":"#ff7f00", "C":"#1b9e77", "U":"#e8e9ea"},
+        "solvent_acc"   : {"B":"#ff00f2", "M":"#17becf", "E":"#004de8", "U":"#e8e9ea"},
+        "competing_aas" : (["#bc0000","#fceaea"],[150])
+        }
 
     #   this is somewhat of a special case since there are too many colors. I just randomly pick 
-    #   colors from self.color_db. 
+    #   colors from self.color_db. Otherwise, the color_scheme is chosen from the above dictionaries.
         if var == "competing_aas":
             hex_codes = random.sample(self.color_db.values(), len(self.template_data))
             color_dict = dict(zip(self.template_data, hex_codes))
             return color_dict
+
+    #   numerical types
+        if self.color_variable_type == "numeric":
+            return color_schemes_numeric[self.config_dict[self.perspective]["color_scheme"]]
+
+    #   string types
+        if self.color_variable_type == "strings":
+            return color_schemes_string[self.config_dict[self.perspective]["color_scheme"]]
 
 
     def get_color_gradient(self):
@@ -1153,10 +1256,10 @@ class Color():
     #   for some reason strings come up as type == object in pandas
         return "strings" if self.saav_table[self.color_variable].dtype==object else "numeric"
 
-    def create_color_indices_for_group(self, saav_data):
+    def create_color_indices_for_group(self, saav_data_color):
         """
         """
-        num_saavs = len(saav_data.index)
+        num_saavs = len(saav_data_color.index)
            
         """ IMPORTANT: PyMOL won't let me define color names that contain any
         numbers whatsoever so I have to name the color of each SAAV some 
@@ -1168,8 +1271,8 @@ class Color():
 
         color_indices = []
         i = 0
-        for resi in saav_data.index:
-            rgb = self.access_color(saav_data.loc[resi, self.color_variable])
+        for resi in saav_data_color.index:
+            rgb = self.access_color(saav_data_color.loc[resi])
             cmd.set_color(color_names[i], rgb)
             color_index = [x[1] for x in cmd.get_color_indices() if x[0]==color_names[i]][0]
             color_indices.append(color_index)
@@ -1216,10 +1319,8 @@ class Config:
         alpha_range   = <"x, y", where x is the the lower radius value and y is the upper, default = 0.00, 0.85
         sidechain     = <whether or not sidechains of the variants are visible>
 
-        merged_color_var     = <a column name from SAAV table>
         merged_radii_var     = <a column name from SAAV table>
         merged_alpha_var     = <a column name from SAAV table>
-        merged_color_scheme  = <a recognized keyword for color mappings, a default exists for each accepted color_var variable>
         merged_radii_range   = <"x, y", where x is the the lower radius value and y is the upper, default = 0.65, 2.6
         merged_alpha_range   = <"x, y", where x is the the lower radius value and y is the upper, default = 0.00, 0.85
 
@@ -1264,9 +1365,6 @@ class Config:
                                "alpha_var",
                                "alpha_range",
                                "alpha_static",
-                               "merged_color_var",
-                               "merged_color_scheme",
-                               "merged_color_static",
                                "merged_radii_var",
                                "merged_radii_range",
                                "merged_radii_static",
@@ -1282,6 +1380,10 @@ class Config:
 
         self.print_config_dict()
 
+
+    def save_pkl(self, directory):
+        with open(os.path.join(directory, '.config.pkl'), 'wb') as handle:
+            pkl.dump(self.config_dict, handle, protocol=pkl.HIGHEST_PROTOCOL)
 
     def attack_config_structure(self):
         """
@@ -1305,7 +1407,6 @@ class Config:
             for x in [("color_var", "color_static"),
                       ("radii_var", "radii_static"),
                       ("alpha_var", "alpha_static"),
-                      ("merged_color_var", "merged_color_static"),
                       ("merged_radii_var", "merged_radii_static"),
                       ("merged_alpha_var", "merged_alpha_static")]:
                 if x[0] in self.config.options(perspective) and x[1] in self.config.options(perspective):
@@ -1316,7 +1417,6 @@ class Config:
             for x in [("color_scheme", "color_var"),
                       ("radii_range",  "radii_var"),
                       ("alpha_range",  "alpha_var"),
-                      ("merged_color_scheme", "merged_color_var"),
                       ("merged_radii_range",  "merged_radii_var"),
                       ("merged_alpha_range",  "merged_alpha_var")]:
                 if (x[0] in self.config.options(perspective) and x[1] not in self.config.options(perspective)):
@@ -1343,7 +1443,7 @@ class Config:
 
         #   Now for the merged variables. If no merged variables were provided, we copy from the nonmerged variables.
             if len([x for x in self.config.options(perspective) if "merged" in x]) == 0:
-                for nonmerged in ["color_var", "radii_var", "alpha_var", "color_static", "radii_static", "alpha_static", "color_scheme", "radii_range", "alpha_range"]:
+                for nonmerged in ["radii_var", "alpha_var", "radii_static", "alpha_static", "radii_range", "alpha_range"]:
                     if nonmerged in self.config.options(perspective):
                         self.config.set(perspective, "merged_"+nonmerged, self.config.get(perspective, nonmerged))
 
@@ -1351,14 +1451,12 @@ class Config:
             else:
                 
             #   if neither _var or _static options were not provided for any of color, alpha, and radii, static default is set
-                for x in [("merged_color_var","merged_color_static"),
-                          ("merged_radii_var","merged_radii_static"),
+                for x in [("merged_radii_var","merged_radii_static"),
                           ("merged_alpha_var","merged_alpha_static")]:
                     if (x[0] not in self.config.options(perspective) and x[1] not in self.config.options(perspective)):
                         self.config.set(perspective, x[1], self.defaults[x[1]])
             #   if color_scheme, radii_range, and alpha_range are not provided (but corresponding _vars are, defaults are set)
-                for x in [("merged_color_var","merged_color_scheme"),
-                          ("merged_radii_var","merged_radii_range"),
+                for x in [("merged_radii_var","merged_radii_range"),
                           ("merged_alpha_var","merged_alpha_range")]:
                     if (x[0] in self.config.options(perspective) and x[1] not in self.config.options(perspective)):
                         self.config.set(perspective, x[1], self.defaults[x[1]])
@@ -1379,6 +1477,30 @@ class Config:
 
             ############## INCOMPLETE. FOR NOW WE TRUST THE USERS OPTION VALUES ARE VALID ##############
 
+            """ IMPORTANT """
+        #   For now, I don't actually allow merged_color_var,
+        #   merged_color_range, or merged_color_scheme to be specified.
+        #   Unfortunately the program flow just doesn't easily support
+        #   this--it's a design flaw that may be changed in the future. To
+        #   foreshadow this potential change, I define the implicit config
+        #   variables merged_color_var, merged_color_range, and
+        #   merged_color_scheme that the user is unable to define but that
+        #   exist implicitly and are simply mirrors of their non-merged
+        #   counterparts, color_var, color_scheme, and color_static.
+            try:
+                self.config.set(perspective, "merged_color_var", self.config.get(perspective, "color_var"))
+            except:
+                pass
+            try:
+                self.config.set(perspective, "merged_color_scheme", self.config.get(perspective, "color_scheme"))
+            except:
+                pass
+            try:
+                self.config.set(perspective, "merged_color_static", self.config.get(perspective, "color_static"))
+            except:
+                pass
+
+
 
     def get_default_dictionary(self):
         """
@@ -1392,18 +1514,16 @@ class Config:
         """
 
         defaults = {"color_static"        : "#842f68",
-                    "merged_color_static" : "#842f68",
                     "color_hierarchy"     : "global",
                     "radii_static"        : "2",
                     "merged_radii_static" : "2",
                     "alpha_static"        : "0.85",
                     "merged_alpha_static" : "0.85",
                     "color_scheme"        : "darkred_to_darkblue",
-                    "merged_color_scheme" : "darkred_to_darkblue",
                     "radii_range"         : "0.65, 2.60",
                     "merged_radii_range"  : "0.65, 2.60",
-                    "alpha_range"         : "0.10, 0.90",
-                    "merged_alpha_range"  : "0.10, 0.90",
+                    "alpha_range"         : "0.10, 0.85",
+                    "merged_alpha_range"  : "0.10, 0.85",
                     "sidechain"           : "no"}
         return defaults
 
@@ -1438,12 +1558,12 @@ class Config:
                                               replace(")", "").split(",")])
 
         type_convert = {"color_var"           : str,
-                        "merged_color_var"    : str,
                         "color_static"        : str,
                         "color_hierarchy"     : str,
+                        "merged_color_var"    : str,
+                        "merged_color_scheme" : str,
                         "merged_color_static" : str,
                         "color_scheme"        : str,
-                        "merged_color_scheme" : str,
                         "radii_var"           : str,
                         "merged_radii_var"    : str,
                         "radii_static"        : float,
