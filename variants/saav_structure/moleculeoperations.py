@@ -44,26 +44,21 @@ class AddRaptorXProperty():
 
     #   making input variables attributes
         self.input_dir = A("input-dir")
-        self.method_list = A("method-list")
         self.ss3_confidence = A("ss3-confidence")
         self.ss8_confidence = A("ss8-confidence")
         self.solvent_acc_confidence = A("solvent-acc-confidence")
-        self.save_file = A("save-file") 
+
     #   make sure table is VariantsTable object
         self.table = table
         MoleculeOperations.validate_table(self.table)
+
     #   make sure the input_dir is in good shape
         MoleculeOperations.validate_input_dir(self.input_dir, self.table)
 
     #   define a list of all append methods in this class
         self.all_append_methods = self.get_append_methods()
 
-    #   validate append methods if methods_list provided
-        if self.method_list:
-            self.validate_method_list()
-    #   otherwise run all append methods
-        else:
-            self.methods_list = self.all_append_methods
+        self.methods_list = self.all_append_methods
 
     #   add all the columns associated with the append methods in method_list
         self.add_columns()
@@ -294,6 +289,15 @@ class VariantsTable():
             This is optional because it is slow
         """
 
+    #   add group size information to sample-groups
+        def append_group_size(x, group):
+            x[group+"_size"] = x["sample_id"].nunique()
+            return x
+
+        groups = [group for group in merger.columns if group != "sample_id"]
+        for group in groups:
+            merger = merger.groupby(group).apply(functools.partial(append_group_size, group=group))
+
     #   make sure at least one column name is shared
         shared_columns = [x for x in list(merger.columns) if x in list(self.saav_table.columns)]
         if len(shared_columns) == 0:
@@ -303,7 +307,6 @@ class VariantsTable():
         self.saav_table = pd.merge(self.saav_table, merger)
 
     #   now add a prevalence column for each group
-        
         if prevalence:
 
             def append_group_prevalence(x, group):
@@ -315,7 +318,6 @@ class VariantsTable():
             for group in groups:
                 subset = self.saav_table.groupby(["unique_pos_identifier", group])[group+"_size", "entry_id"].apply(functools.partial(append_group_prevalence, group=group))
                 self.saav_table = self.saav_table.merge(subset)
-
 
     def get_columns(self):
         """
@@ -342,7 +344,7 @@ class VariantsTable():
         """
         You really don't know?
         """
-    #   if there is no file name provided, return all genes in SAAV table
+    #   if there is no file name provided, return all genes in SAAV table (this might not be all genes in your data!)
         if not self.samples_list_fname:
             return list(self.saav_table["sample_id"].unique())
     #   otherwise return samples_list
@@ -392,9 +394,9 @@ class VariantsTable():
         """
     #   sanity checks
         if not self.save_file:
-            raise ValueError("fuck you")
+            raise ValueError("Surely you're joking, Mr. Feynman")
         if os.path.isfile(self.save_file):
-            raise ValueError("fuck you")
+            raise ValueError("You can't just DO that...")
     #   save the table in same format style as the output of gen-variability-profile
         self.saav_table.to_csv(self.save_file, sep='\t', index=False)
 
@@ -445,9 +447,10 @@ class MoleculeOperations():
         have to make a list of columns found in the config file, and tag to
         each a class and corresponding method responsible for appending them to
         saav_table. Then I will call each of those classes with a method_list
-        parameter, e.g.  AddRaptorXProperty(self.table, methods_list, args).
+        parameter, e.g. AddRaptorXProperty(self.table, methods_list, args).
         Each Add class should have an attribute called "columns_i_add" """
         add_prevalence = False
+    #   read as: if "prevalence" is in your INI file
         for section in self.config.config.sections():
             for option in ["merged_radii_var", "merged_alpha_var"]:
                 if self.config.config.has_option(section, option):
@@ -462,6 +465,9 @@ class MoleculeOperations():
         self.config.save_pkl(self.output_dir)
     #   save the original sample-groups txt file as a dotfile in self.output_dir
         shutil.copyfile(self.sample_groups_fname, os.path.join(self.output_dir, ".sample_groups.txt"))
+    #   save the original gene-list txt file as a dotfile in self.output_dir
+        shutil.copyfile(self.table.genes_list_fname, os.path.join(self.output_dir, ".gene_list.txt"))
+
 
     #   loop_through_perspectives calls loop_through_genes which calls loop_through_groupings
         self.loop_through_perspectives()
@@ -533,29 +539,34 @@ class MoleculeOperations():
 
         group_specific = ["prevalence"]
 
-        if "radii_var" in self.config.config_dict[self.perspective].keys():
-            radii_and_alpha_min_and_max["radii_m"] = self.table.saav_table[self.config.config_dict[self.perspective]["radii_var"]].min()
-            radii_and_alpha_min_and_max["radii_M"] = self.table.saav_table[self.config.config_dict[self.perspective]["radii_var"]].max()
+        if not self.doing_samples:
 
-        if "alpha_var" in self.config.config_dict[self.perspective].keys():
-            radii_and_alpha_min_and_max["alpha_m"] = self.table.saav_table[self.config.config_dict[self.perspective]["alpha_var"]].min()
-            radii_and_alpha_min_and_max["alpha_M"] = self.table.saav_table[self.config.config_dict[self.perspective]["alpha_var"]].max()
+            if "merged_alpha_var" in self.config.config_dict[self.perspective].keys():
+                if self.config.config_dict[self.perspective]["merged_alpha_var"] in group_specific:
+                    radii_and_alpha_min_and_max["merged_alpha_m"] = saav_table_subset[self.grouping+"_"+self.config.config_dict[self.perspective]["merged_alpha_var"]].min()
+                    radii_and_alpha_min_and_max["merged_alpha_M"] = saav_table_subset[self.grouping+"_"+self.config.config_dict[self.perspective]["merged_alpha_var"]].max()
+                else:
+                    radii_and_alpha_min_and_max["merged_alpha_m"] = self.table.saav_table[self.config.config_dict[self.perspective]["merged_alpha_var"]].min()
+                    radii_and_alpha_min_and_max["merged_alpha_M"] = self.table.saav_table[self.config.config_dict[self.perspective]["merged_alpha_var"]].max()
 
-        if "merged_alpha_var" in self.config.config_dict[self.perspective].keys():
-            if self.config.config_dict[self.perspective]["merged_alpha_var"] in group_specific:
-                radii_and_alpha_min_and_max["merged_alpha_m"] = saav_table_subset[self.grouping+"_"+self.config.config_dict[self.perspective]["merged_alpha_var"]].min()
-                radii_and_alpha_min_and_max["merged_alpha_M"] = saav_table_subset[self.grouping+"_"+self.config.config_dict[self.perspective]["merged_alpha_var"]].max()
-            else:
-                radii_and_alpha_min_and_max["merged_alpha_m"] = self.table.saav_table[self.config.config_dict[self.perspective]["merged_alpha_var"]].min()
-                radii_and_alpha_min_and_max["merged_alpha_M"] = self.table.saav_table[self.config.config_dict[self.perspective]["merged_alpha_var"]].max()
+            if "merged_radii_var" in self.config.config_dict[self.perspective].keys():
+                if self.config.config_dict[self.perspective]["merged_radii_var"] in group_specific:
+                    radii_and_alpha_min_and_max["merged_radii_m"] = saav_table_subset[self.grouping+"_"+self.config.config_dict[self.perspective]["merged_radii_var"]].min()
+                    radii_and_alpha_min_and_max["merged_radii_M"] = saav_table_subset[self.grouping+"_"+self.config.config_dict[self.perspective]["merged_radii_var"]].max()
+                    
+                else:
+                    radii_and_alpha_min_and_max["merged_radii_m"] = self.table.saav_table[self.config.config_dict[self.perspective]["merged_radii_var"]].min()
+                    radii_and_alpha_min_and_max["merged_radii_M"] = self.table.saav_table[self.config.config_dict[self.perspective]["merged_radii_var"]].max()
 
-        if "merged_radii_var" in self.config.config_dict[self.perspective].keys():
-            if self.config.config_dict[self.perspective]["merged_radii_var"] in group_specific:
-                radii_and_alpha_min_and_max["merged_radii_m"] = saav_table_subset[self.grouping+"_"+self.config.config_dict[self.perspective]["merged_radii_var"]].min()
-                radii_and_alpha_min_and_max["merged_radii_M"] = saav_table_subset[self.grouping+"_"+self.config.config_dict[self.perspective]["merged_radii_var"]].max()
-            else:
-                radii_and_alpha_min_and_max["merged_radii_m"] = self.table.saav_table[self.config.config_dict[self.perspective]["merged_radii_var"]].min()
-                radii_and_alpha_min_and_max["merged_radii_M"] = self.table.saav_table[self.config.config_dict[self.perspective]["merged_radii_var"]].max()
+        else:
+
+            if "radii_var" in self.config.config_dict[self.perspective].keys():
+                radii_and_alpha_min_and_max["radii_m"] = self.table.saav_table[self.config.config_dict[self.perspective]["radii_var"]].min()
+                radii_and_alpha_min_and_max["radii_M"] = self.table.saav_table[self.config.config_dict[self.perspective]["radii_var"]].max()
+
+            if "alpha_var" in self.config.config_dict[self.perspective].keys():
+                radii_and_alpha_min_and_max["alpha_m"] = self.table.saav_table[self.config.config_dict[self.perspective]["alpha_var"]].min()
+                radii_and_alpha_min_and_max["alpha_M"] = self.table.saav_table[self.config.config_dict[self.perspective]["alpha_var"]].max()
 
         return radii_and_alpha_min_and_max
 
@@ -737,9 +748,7 @@ class MoleculeOperations():
             cmd.show("spheres","{} and name ca".format(self.member))
 
         #   save the file
-            start = time.time()
             cmd.save(self.saav_pse_path, self.member)
-            print(time.time() - start)
 
 
 
@@ -789,6 +798,10 @@ class MoleculeOperations():
                 beta  = self.config.config_dict[self.perspective][t("alpha_range")][1]
                 m = self.radii_and_alpha_min_and_max[t("alpha_m")]
                 M = self.radii_and_alpha_min_and_max[t("alpha_M")]
+            #   if the max is the min, we don't have a range to normalize over. the best
+            #   we can do is return the average of alpha and beta
+                if m == M:
+                    return (beta + alpha)/2
                 a = alpha - m * (beta-alpha) / (M-m)
                 b = (beta-alpha) / (M-m)
             #   return normalized version of data
@@ -815,6 +828,10 @@ class MoleculeOperations():
                 beta  = self.config.config_dict[self.perspective][t("radii_range")][1]
                 m = self.radii_and_alpha_min_and_max[t("radii_m")]
                 M = self.radii_and_alpha_min_and_max[t("radii_M")]
+            #   if the max is the min, we don't have a range to normalize over. the best
+            #   we can do is return the average of alpha and beta
+                if m == M:
+                    return (beta + alpha)/2
                 a = alpha - m * (beta-alpha) / (M-m)
                 b = (beta-alpha) / (M-m)
             #   return normalized version of data
@@ -840,8 +857,8 @@ class MoleculeOperations():
         #   pymol_property is either "color", "alpha", or "radii"
             pymol_property = key.replace("_var","").replace("_static","").replace("merged_","")
             property_value = self.config.config_dict[self.perspective][key]
-            print("property value"+str(property_value))
-            print(key)
+            if property_value == "prevalence":
+                property_value = self.grouping+"_prevalence"
 
         #   two workflows: one if its variable, and one if its static
             if "_var" in key:
@@ -952,15 +969,6 @@ class MoleculeOperations():
                              "in your SAAV table. You can't just do that. The following are in "
                              "sample-groups but not in saav_table".format\
                              ([x for x in in_samples if x not in in_both]))
-
-    #   add group size information to sample-groups
-        def append_group_size(x, group):
-            x[group+"_size"] = x["sample_id"].nunique()
-            return x
-
-        groups = [group for group in self.sample_groups.columns if group != "sample_id"]
-        for group in groups:
-            self.sample_groups = self.sample_groups.groupby(group).apply(functools.partial(append_group_size, group=group))
 
 
     def get_relevant_saav_table(self, gene=None, member=None):
@@ -1146,9 +1154,10 @@ class Color():
         """
 
         color_schemes_numeric = {
-        "red_to_blue"         : (["#a03129","#fcf5f4","#ffffff","#e8edf9", "#264799"],[50,25,25,50]),
-        "darkred_to_darkblue" : (["#7c0b03","#7c0b03","#fcf5f4","#ffffff","#e8edf9", "#133382"],[34,50,10,10,50]),
-        "white_to_bloodred"   : (["#bc0000","#fceaea"],[150])
+        "red_to_blue"                 : (["#a03129","#fcf5f4","#ffffff","#e8edf9", "#264799"],[50,25,25,50]),
+        "darkred_to_darkblue"         : (["#7c0b03","#7c0b03","#fcf5f4","#ffffff","#e8edf9", "#133382"],[34,50,10,10,50]),
+        "white_to_bloodred"           : (["#bc0000","#fceaea"],[150]),
+        "rel_diff_from_mean_gene_cov" : (["#b6c7ee","#e8edf9","#ffffff","#fcf5f4", "#7c0b03"],[10,10,10,50])
         }
 
         color_schemes_string = {
@@ -1378,8 +1387,6 @@ class Config:
 
         self.convert_configparser_to_dictionary()
 
-        self.print_config_dict()
-
 
     def save_pkl(self, directory):
         with open(os.path.join(directory, '.config.pkl'), 'wb') as handle:
@@ -1462,8 +1469,10 @@ class Config:
                         self.config.set(perspective, x[1], self.defaults[x[1]])
 
         #   Finally, we add defaults for variables that are independent of other variables (sidechain, protein color, yada, yada, yada) 
-            if "sidechain" not in self.config.options(perspective):
-                self.config.set(perspective, "sidechain", self.defaults["sidechain"])
+            for option in ["sidechain", "color_hierarchy"]:
+                if option not in self.config.options(perspective):
+                    self.config.set(perspective, option, self.defaults[option])
+
 
 
             """All defaults have been added. Now going through the value for each option to make sure its valid"""
@@ -1520,8 +1529,8 @@ class Config:
                     "alpha_static"        : "0.85",
                     "merged_alpha_static" : "0.85",
                     "color_scheme"        : "darkred_to_darkblue",
-                    "radii_range"         : "0.65, 2.60",
-                    "merged_radii_range"  : "0.65, 2.60",
+                    "radii_range"         : "0.75, 2.60",
+                    "merged_radii_range"  : "0.75, 2.60",
                     "alpha_range"         : "0.10, 0.85",
                     "merged_alpha_range"  : "0.10, 0.85",
                     "sidechain"           : "no"}
@@ -1589,11 +1598,11 @@ class Config:
         """
         Just some print function
         """
+        
         for key in self.config_dict.keys():
-            print("\n\n")
             print("{}".format(key))
             for keys, value in self.config_dict[key].items():
                 print(keys, value)
-            print("\n\n")
+            print("\n")
 
 
