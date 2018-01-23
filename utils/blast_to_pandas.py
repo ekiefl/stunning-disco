@@ -14,7 +14,8 @@ def blast_to_pandas(f, cols=None):
         The table output by BLAST.
     cols : string, default None
         The manually supplied outfmt format given to blastp. For example, if you used
-        `--outfmt 6 "qseqid sseqid qlen"`, cols = "qseqid sseqid qlen"
+        `--outfmt 6 "qseqid sseqid pident qlen length mismatch gapopen qstart qend sstart send evalue bitscore"`, 
+        cols = "qseqid sseqid pident qlen length mismatch gapopen qstart qend sstart send evalue bitscore"
     
     RETURNS
     -------
@@ -26,6 +27,9 @@ def blast_to_pandas(f, cols=None):
     if cols:
         cols = cols.split(" ") 
     else:
+        suggestion = "qseqid sseqid pident qlen length mismatch gapopen qstart qend sstart send evalue bitscore"
+        print(("Warning: You didn't supply the column order. If you used a custom order, "
+               "such as '{}', you should declare it".format(suggestion)))
         cols = ["qseqid","sseqid","pident","length","mismatch","gapopen",
                 "qstart","qend","sstart","send","evalue","bitscore"]
 
